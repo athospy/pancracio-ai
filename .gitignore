@@ -1,0 +1,17 @@
+# Large binary assets — tracked locally, not in git
+pancracio-photos/
+pancracio-web/pancracio.glb
+pancracio-web/pancracio.usdz
+photogrammetry-output/
+pancracio-ai-model/*.HEIC
+pancracio-ai-model/*.mp4
+pancracio-ai-model/renders/
+
+# Private notes
+internal-docs/
+
+# macOS
+.DS_Store
+
+# Playwright MCP logs
+.playwright-mcp/
