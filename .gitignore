@@ -1,14 +1,23 @@
-# Large binary assets — tracked locally, not in git
-pancracio-photos/
-pancracio-web/pancracio.glb
-pancracio-web/pancracio.usdz
-photogrammetry-output/
-pancracio-ai-model/*.HEIC
-pancracio-ai-model/*.mp4
-pancracio-ai-model/renders/
+# Character media (AI-generated variants and raw video/frames)
+character/cartoon/
+character/videos/
+character/frames/
+character/renders/
+character/*.HEIC
+
+# Image posts (ChatGPT-generated, binary)
+image-post/
+
+# Posts (all binary — mp4, mp3)
+posts/
 
 # Private notes
 internal-docs/
+
+# Remotion build artifacts (source code is tracked)
+remotion/node_modules/
+remotion/out/
+remotion/dist/
 
 # macOS
 .DS_Store
