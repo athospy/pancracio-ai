@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "_idea_card.html" import idea_card with context %}
+{% block title %}Queue — Pancracio Ideas{% endblock %}
+{% block content %}
+
+<a href="/" class="back-link">&larr; All ideas</a>
+
+<section>
+  <h2>Ready to post</h2>
+  <p class="muted">Everything marked "ready," soonest scheduled first. This is what a future automation would post next.</p>
+</section>
+
+<section class="ideas-list">
+  {% if not ideas %}
+  <p class="empty">Nothing marked "ready" yet.</p>
+  {% endif %}
+  {% for idea in ideas %}
+  {{ idea_card(idea, statuses) }}
+  {% endfor %}
+</section>
+
+{% endblock %}

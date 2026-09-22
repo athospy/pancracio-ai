@@ -1,0 +1,26 @@
+{% macro idea_card(idea, statuses) %}
+<article class="idea-card status-{{ idea.status }}">
+  <div class="idea-card-head">
+    <h3><a href="/ideas/{{ idea.id }}/edit">{{ idea.title }}</a></h3>
+    {% if idea.score %}<span class="score">{{ "★" * idea.score }}</span>{% endif %}
+  </div>
+  <div class="idea-meta">
+    <span class="pill type-{{ idea.content_type }}">{{ idea.content_type }}</span>
+    <span class="pill status-pill status-{{ idea.status }}">{{ idea.status }}</span>
+    {% if idea.category %}<span class="pill category">{{ idea.category }}</span>{% endif %}
+    {% if idea.scheduled_at %}<span class="pill scheduled">📅 {{ idea.scheduled_at | replace("T", " ") }}</span>{% endif %}
+  </div>
+  {% if idea.description %}<p class="idea-desc">{{ idea.description }}</p>{% endif %}
+  {% if idea.content_type == 'image' and idea.status == 'ready' and not idea.final_image_path %}
+  <p class="warning">⚠️ Marked ready but no final image uploaded yet</p>
+  {% endif %}
+  <form method="post" action="/ideas/{{ idea.id }}/status" class="status-bump">
+    <input type="hidden" name="redirect_to" value="{{ request.url.path }}">
+    <select name="status" onchange="this.form.submit()">
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if s == idea.status %}selected{% endif %}>{{ s|capitalize }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</article>
+{% endmacro %}

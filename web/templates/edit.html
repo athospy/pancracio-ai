@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Edit — {{ idea.title }}{% endblock %}
+{% block content %}
+
+<a href="/" class="back-link">&larr; All ideas</a>
+
+<section>
+  <h2>Edit idea</h2>
+  <form method="post" action="/ideas/{{ idea.id }}" class="idea-form">
+    <input type="text" name="title" value="{{ idea.title }}" required>
+    <div class="row">
+      <select name="content_type">
+        {% for ct in content_types %}
+        <option value="{{ ct }}" {% if ct == idea.content_type %}selected{% endif %}>{{ ct|capitalize }}</option>
+        {% endfor %}
+      </select>
+      <select name="status">
+        {% for s in statuses %}
+        <option value="{{ s }}" {% if s == idea.status %}selected{% endif %}>{{ s|capitalize }}</option>
+        {% endfor %}
+      </select>
+      <select name="score">
+        <option value="">No score</option>
+        {% for n in range(1, 6) %}
+        <option value="{{ n }}" {% if idea.score == n %}selected{% endif %}>{{ n }} {{ "★" * n }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <input type="text" name="category" placeholder="Category" value="{{ idea.category or '' }}">
+    <textarea name="description" placeholder="Description" rows="3">{{ idea.description or '' }}</textarea>
+    <div class="row">
+      <input type="text" name="tags" placeholder="Tags" value="{{ idea.tags or '' }}">
+      <input type="text" name="inspiration_source" placeholder="Inspired by" value="{{ idea.inspiration_source or '' }}">
+    </div>
+    <div>
+      <label class="field-label" for="caption">Instagram caption</label>
+      <textarea id="caption" name="caption" placeholder="What the post caption will say" rows="3">{{ idea.caption or '' }}</textarea>
+    </div>
+    <div>
+      <label class="field-label" for="hashtags">Hashtags</label>
+      <input type="text" id="hashtags" name="hashtags" placeholder="#pancracio #capybara ..." value="{{ idea.hashtags or '' }}">
+    </div>
+    <div>
+      <label class="field-label" for="scheduled_at">Scheduled to post</label>
+      <input type="datetime-local" id="scheduled_at" name="scheduled_at" value="{{ idea.scheduled_at or '' }}">
+    </div>
+    <div>
+      <label class="field-label" for="image_prompt">GPT-4o layout prompt</label>
+      <textarea id="image_prompt" name="image_prompt" placeholder="Prompt to paste into ChatGPT to generate the layout image" rows="4">{{ idea.image_prompt or '' }}</textarea>
+      {% if character_reference_image %}
+      <p class="muted">
+        Attach the <a href="/settings">character reference image</a> alongside this prompt to keep Pancracio consistent.
+      </p>
+      {% else %}
+      <p class="muted">No <a href="/settings">character reference image</a> set yet — add one to keep generations consistent.</p>
+      {% endif %}
+    </div>
+    <button type="submit" class="btn-primary">Save changes</button>
+  </form>
+</section>
+
+{% if idea.status != 'posted' %}
+<section>
+  <a href="/ideas/{{ idea.id }}/post" class="btn-secondary">Mark as posted →</a>
+</section>
+{% endif %}
+
+<section class="images-section">
+  <h2>Process images</h2>
+  {% if idea.content_type == 'image' and idea.status == 'ready' and not idea.final_image_path %}
+  <p class="warning">⚠️ Marked ready but no final image uploaded yet — upload one before this can be posted.</p>
+  {% endif %}
+  <form method="post" action="/ideas/{{ idea.id }}/images" enctype="multipart/form-data" class="idea-form">
+    <div class="row">
+      <div class="image-slot">
+        <label>Layout only</label>
+        {% if idea.layout_image_path %}
+        <img src="{{ idea.layout_image_path }}" alt="Layout only" class="image-preview">
+        {% endif %}
+        <input type="file" name="layout_image" accept="image/png,image/jpeg,image/webp">
+      </div>
+      <div class="image-slot">
+        <label>Complete post</label>
+        {% if idea.final_image_path %}
+        <img src="{{ idea.final_image_path }}" alt="Complete post" class="image-preview">
+        {% endif %}
+        <input type="file" name="final_image" accept="image/png,image/jpeg,image/webp">
+      </div>
+    </div>
+    <button type="submit" class="btn-secondary">Upload images</button>
+  </form>
+</section>
+
+{% if posts %}
+<section class="posts-section">
+  <h2>Posts &amp; audience response</h2>
+  {% for post in posts %}
+  <div class="post-card">
+    <p><strong>{{ post.platform }}</strong>
+      {% if post.post_url %} — <a href="{{ post.post_url }}" target="_blank">view post</a>{% endif %}
+      {% if post.posted_at %} — posted {{ post.posted_at }}{% endif %}
+    </p>
+    <form method="post" action="/posts/{{ post.id }}/metrics" class="metrics-form">
+      <div class="row">
+        <input type="number" name="likes" placeholder="Likes" value="{{ post.likes if post.likes is not none else '' }}">
+        <input type="number" name="comments" placeholder="Comments" value="{{ post.comments if post.comments is not none else '' }}">
+        <input type="number" name="views" placeholder="Views" value="{{ post.views if post.views is not none else '' }}">
+      </div>
+      <div class="row">
+        <input type="number" name="shares" placeholder="Shares" value="{{ post.shares if post.shares is not none else '' }}">
+        <input type="number" name="saves" placeholder="Saves" value="{{ post.saves if post.saves is not none else '' }}">
+      </div>
+      <textarea name="notes" placeholder="Notes on audience response" rows="2">{{ post.notes or '' }}</textarea>
+      <button type="submit" class="btn-secondary">Update metrics</button>
+    </form>
+    {% if post.metrics_updated_at %}<p class="muted">Last updated {{ post.metrics_updated_at }}</p>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% endblock %}

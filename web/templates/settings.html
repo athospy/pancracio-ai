@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Settings — Pancracio Ideas{% endblock %}
+{% block content %}
+
+<a href="/" class="back-link">&larr; All ideas</a>
+
+<section>
+  <h2>Character reference image</h2>
+  <p class="muted">
+    Attach this alongside each idea's layout prompt in ChatGPT to keep Pancracio's look consistent across generations.
+  </p>
+  {% if character_reference_image %}
+  <img src="{{ character_reference_image }}" alt="Character reference" class="image-preview">
+  {% else %}
+  <p class="empty">No reference image set yet.</p>
+  {% endif %}
+  <form method="post" action="/settings/character-reference" enctype="multipart/form-data" class="idea-form">
+    <input type="file" name="reference_image" accept="image/png,image/jpeg,image/webp" required>
+    <button type="submit" class="btn-secondary">
+      {% if character_reference_image %}Replace image{% else %}Upload image{% endif %}
+    </button>
+  </form>
+</section>
+
+{% endblock %}

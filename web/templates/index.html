@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "_idea_card.html" import idea_card with context %}
+{% block title %}Ideas — Pancracio{% endblock %}
+{% block content %}
+
+<section class="quick-add">
+  <h2>Got an idea?</h2>
+  <form method="post" action="/ideas" class="idea-form">
+    <input type="text" name="title" placeholder="Idea title" required autofocus>
+    <div class="row">
+      <select name="content_type">
+        {% for ct in content_types %}
+        <option value="{{ ct }}">{{ ct|capitalize }}</option>
+        {% endfor %}
+      </select>
+      <input type="text" name="category" placeholder="Category (optional)">
+    </div>
+    <textarea name="description" placeholder="What's it about? (optional)" rows="2"></textarea>
+    <div class="row">
+      <input type="text" name="tags" placeholder="Tags, comma separated (optional)">
+      <input type="text" name="inspiration_source" placeholder="Inspired by... (optional)">
+    </div>
+    <button type="submit" class="btn-primary">Save idea</button>
+  </form>
+</section>
+
+<section class="filters">
+  <form method="get" action="/" class="filter-form">
+    <select name="status" onchange="this.form.submit()">
+      <option value="">All statuses</option>
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if s == active_status %}selected{% endif %}>{{ s|capitalize }}</option>
+      {% endfor %}
+    </select>
+    <select name="content_type" onchange="this.form.submit()">
+      <option value="">All types</option>
+      {% for ct in content_types %}
+      <option value="{{ ct }}" {% if ct == active_content_type %}selected{% endif %}>{{ ct|capitalize }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</section>
+
+<section class="ideas-list">
+  {% if not ideas %}
+  <p class="empty">No ideas yet — add one above.</p>
+  {% endif %}
+  {% for idea in ideas %}
+  {{ idea_card(idea, statuses) }}
+  {% endfor %}
+</section>
+
+{% endblock %}

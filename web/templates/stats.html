@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Stats — Pancracio Ideas{% endblock %}
+{% block content %}
+
+<a href="/" class="back-link">&larr; All ideas</a>
+
+<section>
+  <h2>Stats</h2>
+  {% if summary.post_count == 0 %}
+  <p class="empty">No posts with logged metrics yet — log audience response on a posted idea to see stats here.</p>
+  {% endif %}
+</section>
+
+{% if summary.post_count > 0 %}
+<section class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-value">{{ summary.post_count }}</div>
+    <div class="stat-label">Posts tracked</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ summary.total_likes or 0 }}</div>
+    <div class="stat-label">Total likes</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ summary.total_comments or 0 }}</div>
+    <div class="stat-label">Total comments</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ summary.total_views or 0 }}</div>
+    <div class="stat-label">Total views</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ summary.total_shares or 0 }}</div>
+    <div class="stat-label">Total shares</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ summary.total_saves or 0 }}</div>
+    <div class="stat-label">Total saves</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ "%.1f"|format(summary.avg_likes or 0) }}</div>
+    <div class="stat-label">Avg likes / post</div>
+  </div>
+</section>
+
+<section>
+  <h2>Best performing posts</h2>
+  <div class="ideas-list">
+    {% for post in top_posts %}
+    <article class="idea-card">
+      <div class="idea-card-head">
+        <h3><a href="/ideas/{{ post.idea_id }}/edit">{{ post.title }}</a></h3>
+        <span class="score">{{ post.likes }} ♥</span>
+      </div>
+      <div class="idea-meta">
+        <span class="pill type-{{ post.content_type }}">{{ post.content_type }}</span>
+        {% if post.category %}<span class="pill category">{{ post.category }}</span>{% endif %}
+        {% if post.score %}<span class="pill">rated {{ post.score }}★</span>{% endif %}
+      </div>
+      <p class="muted">
+        {{ post.comments or 0 }} comments · {{ post.views or 0 }} views ·
+        {{ post.shares or 0 }} shares · {{ post.saves or 0 }} saves
+        {% if post.posted_at %} · posted {{ post.posted_at }}{% endif %}
+      </p>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section>
+  <h2>By category</h2>
+  <p class="muted">Average likes per post, by category — use this to plan what to make more of.</p>
+  <div class="bar-list">
+    {% for row in by_category %}
+    <div class="bar-row">
+      <span class="bar-label">{{ row.label }} <span class="muted">({{ row.post_count }})</span></span>
+      <div class="bar-track">
+        <div class="bar-fill" style="width: {{ ((row.avg_likes or 0) / max_category_likes * 100) if max_category_likes else 0 }}%"></div>
+      </div>
+      <span class="bar-value">{{ "%.1f"|format(row.avg_likes or 0) }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section>
+  <h2>By content type</h2>
+  <p class="muted">Images vs. videos — which format actually performs better.</p>
+  <div class="bar-list">
+    {% for row in by_content_type %}
+    <div class="bar-row">
+      <span class="bar-label">{{ row.label|capitalize }} <span class="muted">({{ row.post_count }})</span></span>
+      <div class="bar-track">
+        <div class="bar-fill" style="width: {{ ((row.avg_likes or 0) / max_content_type_likes * 100) if max_content_type_likes else 0 }}%"></div>
+      </div>
+      <span class="bar-value">{{ "%.1f"|format(row.avg_likes or 0) }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section>
+  <h2>Your rating vs. actual performance</h2>
+  <p class="muted">Did the ideas you scored higher at ideation time actually do better? A gut-check on your own judgment.</p>
+  <div class="bar-list">
+    {% for row in by_score %}
+    <div class="bar-row">
+      <span class="bar-label">{{ row.label }}★ <span class="muted">({{ row.post_count }})</span></span>
+      <div class="bar-track">
+        <div class="bar-fill" style="width: {{ ((row.avg_likes or 0) / max_score_likes * 100) if max_score_likes else 0 }}%"></div>
+      </div>
+      <span class="bar-value">{{ "%.1f"|format(row.avg_likes or 0) }}</span>
+    </div>
+    {% endfor %}
+    {% if not by_score %}
+    <p class="empty">No scored ideas with logged metrics yet.</p>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+{% endblock %}

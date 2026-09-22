@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Pancracio Ideas{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="/" class="brand">🐹 Pancracio Ideas</a>
+    <nav class="nav-links">
+      <a href="/queue" class="settings-link">Queue</a>
+      <a href="/stats" class="settings-link">Stats</a>
+      <a href="/settings" class="settings-link">Settings</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

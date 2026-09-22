@@ -30,3 +30,10 @@ remotion/dist/
 
 # Locally-installed agent skill packs (vendor tooling, not project source)
 .agents/
+
+# Ideas tracker web app (source is tracked; runtime data and env are not)
+web/pancracio.db
+web/venv/
+web/__pycache__/
+web/.env
+web/static/uploads/

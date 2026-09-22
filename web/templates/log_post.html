@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Mark posted — {{ idea.title }}{% endblock %}
+{% block content %}
+
+<a href="/ideas/{{ idea.id }}/edit" class="back-link">&larr; Back</a>
+
+<section>
+  <h2>Mark "{{ idea.title }}" as posted</h2>
+  <form method="post" action="/ideas/{{ idea.id }}/post" class="idea-form">
+    <select name="platform">
+      <option value="instagram" selected>Instagram</option>
+      <option value="tiktok">TikTok</option>
+      <option value="other">Other</option>
+    </select>
+    <input type="url" name="post_url" placeholder="Link to the post (optional)">
+    <input type="date" name="posted_at">
+    <button type="submit" class="btn-primary">Save</button>
+  </form>
+</section>
+
+{% endblock %}
