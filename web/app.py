@@ -244,9 +244,9 @@ def index(
 ):
     ideas = _get_ideas(status=status, content_type=content_type)
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "ideas": ideas,
             "statuses": STATUSES,
             "content_types": CONTENT_TYPES,
@@ -260,7 +260,7 @@ def index(
 def queue_page(request: Request, _: None = Depends(check_auth)):
     ideas = _get_ready_queue()
     return templates.TemplateResponse(
-        "queue.html", {"request": request, "ideas": ideas, "statuses": STATUSES}
+        request, "queue.html", {"ideas": ideas, "statuses": STATUSES}
     )
 
 
@@ -270,9 +270,9 @@ def stats_page(request: Request, _: None = Depends(check_auth)):
     by_content_type = _get_stats_by_content_type()
     by_score = _get_stats_by_score()
     return templates.TemplateResponse(
+        request,
         "stats.html",
         {
-            "request": request,
             "summary": _get_stats_summary(),
             "top_posts": _get_top_posts(),
             "by_category": by_category,
@@ -311,9 +311,9 @@ def edit_idea_form(idea_id: int, request: Request, _: None = Depends(check_auth)
     idea = _get_idea(idea_id)
     posts = _get_posts_for_idea(idea_id)
     return templates.TemplateResponse(
+        request,
         "edit.html",
         {
-            "request": request,
             "idea": idea,
             "posts": posts,
             "statuses": STATUSES,
@@ -408,7 +408,7 @@ def bump_status(
 def mark_posted_form(idea_id: int, request: Request, _: None = Depends(check_auth)):
     idea = _get_idea(idea_id)
     return templates.TemplateResponse(
-        "log_post.html", {"request": request, "idea": idea}
+        request, "log_post.html", {"idea": idea}
     )
 
 
@@ -471,9 +471,9 @@ def update_metrics(
 @app.get("/settings")
 def settings_page(request: Request, _: None = Depends(check_auth)):
     return templates.TemplateResponse(
+        request,
         "settings.html",
         {
-            "request": request,
             "character_reference_image": _get_setting("character_reference_image"),
         },
     )
