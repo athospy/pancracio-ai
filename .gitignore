@@ -8,6 +8,9 @@ character/*.HEIC
 # Image posts (ChatGPT-generated, binary)
 image-post/
 
+# Raw video-concept images and layout mockups (ChatGPT-generated, binary)
+video-images/
+
 # Posts (all binary — mp4, mp3)
 posts/
 
@@ -24,3 +27,6 @@ remotion/dist/
 
 # Playwright MCP logs
 .playwright-mcp/
+
+# Locally-installed agent skill packs (vendor tooling, not project source)
+.agents/

@@ -1,5 +1,3 @@
-# Remotion video
-
 <p align="center">
   <a href="https://github.com/remotion-dev/logo">
     <picture>
@@ -9,46 +7,57 @@
   </a>
 </p>
 
-Welcome to your Remotion project!
+# Pancracio — Remotion
 
-## Commands
+Programmatic video/image compositing for [Pancracio](../README.md)'s Instagram content:
+captions and branding on top of PixVerse Reel clips, and the typography layer for daily
+quote-card image posts.
 
-**Install Dependencies**
+## Setup
 
-```console
+```bash
 npm i
 ```
 
-**Start Preview**
+## Compositions
 
-```console
+| ID | Type | Frame size | Status |
+|---|---|---|---|
+| [`MyComposition`](src/Composition.tsx) | Composition | 1280×720 | Remotion starter template — unused |
+| [`CloseTabs`](src/CloseTabs.tsx) | Composition | 1080×1920 | Retired — wrong avatar, off-brand concept. See [lessons-learned.md](../internal-docs/video-production/lessons-learned.md) |
+| [`GuideToBeingLessAvailable`](src/GuideToBeingLessAvailable.tsx) | Composition | 1080×1920 | **Published** — [Reel](https://www.instagram.com/reels/Da_q4jxpiAy/). Build log: [guide-to-being-less-available.md](../internal-docs/video-production/guide-to-being-less-available.md) |
+| [`PancracioQuote`](src/PancracioQuote.tsx) | Still | 1122×1402 | **Active** — typography layer for every daily image post batch. See [quote-card-compositing.md](../internal-docs/pipeline/quote-card-compositing.md) |
+
+## Commands
+
+**Preview in browser (hot reload)**
+
+```bash
 npm run dev
 ```
 
-**Render video**
+**Render a video composition**
 
-```console
-npx remotion render
+```bash
+npx remotion render GuideToBeingLessAvailable output/video.mp4
+```
+
+**Render a quote card (still image)**
+
+```bash
+./node_modules/.bin/remotion still PancracioQuote out/post-01.png --overwrite
 ```
 
 **Upgrade Remotion**
 
-```console
+```bash
 npx remotion upgrade
 ```
 
 ## Docs
 
-Get started with Remotion by reading the [fundamentals page](https://www.remotion.dev/docs/the-fundamentals).
-
-## Help
-
-We provide help on our [Discord server](https://discord.gg/6VzzNDwUwV).
-
-## Issues
-
-Found an issue with Remotion? [File an issue here](https://github.com/remotion-dev/remotion/issues/new).
-
-## License
-
-Note that for some entities a company license is needed. [Read the terms here](https://github.com/remotion-dev/remotion/blob/main/LICENSE.md).
+- [`internal-docs/integrations/remotion.md`](../internal-docs/integrations/remotion.md) — project-specific Remotion notes and Claude Code skill setup
+- [Remotion fundamentals](https://www.remotion.dev/docs/the-fundamentals) — official getting-started guide
+- [Discord](https://discord.gg/6VzzNDwUwV) — Remotion community help
+- [File an issue](https://github.com/remotion-dev/remotion/issues/new) — Remotion framework bugs
+- [License](https://github.com/remotion-dev/remotion/blob/main/LICENSE.md) — a company license may be required for some entities

@@ -2,35 +2,41 @@
 
 AI-assisted character production for **Pancracio** — a capybara plush toy wearing a Paraguayan flag scarf and a Pittsburgh State University badge.
 
+For current status (what's published, what's in progress) see [`CLAUDE.md`](CLAUDE.md) — kept as the single source of truth so status isn't duplicated and going stale in two places.
+
 ---
 
 ## Directory Map
 
 ```
 pancracio-ai/
-├── character/               Character assets — cartoon variants (local only, gitignored)
-├── image-post/              ChatGPT-generated image posts (local only, gitignored)
-├── posts/                   Per-post content — voice, video, final output (local only, gitignored)
-├── remotion/                Programmatic video composition (React/Remotion, tracked)
-└── internal-docs/           Private runbooks and step-by-step guides (gitignored)
+├── character/               Character reference assets (gitignored except top-level refs*)
+├── image-post/              Final composited daily image posts (gitignored)
+├── posts/                   Per-post video content — voice, video, final output (gitignored)
+├── video-images/            Raw ChatGPT concept images + layout mockups (gitignored)
+├── remotion/                Programmatic video/image composition (React/Remotion, tracked)
+├── internal-docs/           Private runbooks and step-by-step guides (gitignored)
+├── .claude/                 Claude Code project settings (tracked)
+├── .agents/                 Locally-installed agent skill packs (gitignored)
+└── skills-lock.json         Skill provenance lock for .agents/ (tracked)
 ```
+
+\* `character/highres_*.png` (real-plush references) and `character/template_*.png` (raw
+GPT-4o background plates) aren't matched by any `.gitignore` rule — only `character/cartoon/`
+is excluded. Worth checking before a broad `git add character/`.
 
 ---
 
 ## `character/` — Who Pancracio Is
 
-**Canonical reference images** are stored locally (not in git). The key ones:
+Two character versions are in use, anchored to different reference sets depending on the pipeline:
 
-| File | Description |
-|------|-------------|
-| `highres_initial.png` | **Canonical #1** — eyes closed, meditation pose, mudra hands |
-| `highres_final.png` | **Canonical #2** — eyes open, sitting upright, alert pose |
-
-**Subdirectories (gitignored, local only):**
-
-| Directory | Contents |
-|-----------|----------|
-| `cartoon/` | ChatGPT-generated 2D cartoon variants (7 PNGs, Jun 20 2026 session) |
+| File / dir | Description | Used by |
+|---|---|---|
+| `highres_initial.png` | Real plush, eyes closed, meditation pose | ElevenLabs (Reel video generation) |
+| `highres_final.png` | Real plush, eyes open, sitting upright | ElevenLabs (Reel video generation) |
+| `cartoon/` (gitignored) | GPT-4o 3D cartoon-render variants, zen room setting | ChatGPT image posts |
+| `template_N.png` (gitignored) | Raw GPT-4o background plates, no text | Image post pipeline — copied into `remotion/public/image-posts/` |
 
 **Character token** — paste this into every AI prompt to keep him on-model:
 ```
@@ -40,51 +46,56 @@ small Pittsburgh State University badge on chest (gold background, black gorilla
 sitting upright pose
 ```
 
+Full consistency guide: `internal-docs/video-production/character-consistency.md`.
+
 ---
 
 ## `image-post/` — Daily Image Posts
 
-ChatGPT-generated images for daily Instagram posts. Gitignored (local only).
+Final, approved quote-card images ready for Instagram. Gitignored (local only).
 
-Workflow and scheduling managed via Meta Business Suite. See `internal-docs/social/image-posts.md`.
+Produced by the two-layer pipeline (GPT-4o background plate + Remotion typography) — see
+`remotion/` below and `internal-docs/pipeline/quote-card-compositing.md`. Scheduling is
+managed via Meta Business Suite; see `internal-docs/social/image-posts.md`.
 
 ---
 
-## `posts/` — Video Content
+## `posts/` — Reel Content
 
 ```
 posts/
-├── voice/          Shared voice assets
-│   └── pancracio_voice.mp3   ← master ElevenLabs voice (Eleven v3)
-├── post-1/         PUBLISHED
-├── post-2/         Video and voice ready
-└── post-3/         Voice and video candidates ready
+├── voice/                          Voice assets (ElevenLabs + Voicebox)
+├── post-1/ post-2/ post-3/         Per-post video/voice candidates and finals
+└── guide-to-being-less-available/  Long-form Reel render
 ```
 
-All content is gitignored (local only, binary files).
-
-**Current status (June 2026):**
-- Post 1 — published to Instagram as a Reel
-- Post 2 — video and voice ready
-- Post 3 — voice and video candidates ready
-
-See `internal-docs/social/next-session-prompt.md` to start a Reel publishing session.
+All content is gitignored (local only, binary files). See `CLAUDE.md` for per-post status and
+`internal-docs/social/next-session-prompt.md` to start a publishing session.
 
 ---
 
-## `remotion/` — Programmatic Video Composition
+## `remotion/` — Programmatic Video & Image Composition
 
-React/TypeScript project for compositing video programmatically. Used to add captions, overlays, animated text, and branding on top of PixVerse character clips.
+React/TypeScript project used to add captions, overlays, and branding on top of ElevenLabs Reel
+clips, and to composite the typography layer on daily quote-card image posts.
 
 ```bash
 # Preview in browser
 cd remotion && npm run dev
 
-# Render to MP4
-cd remotion && npx remotion render MyComp output/video.mp4
+# Render a video composition
+cd remotion && npx remotion render GuideToBeingLessAvailable output/video.mp4
+
+# Render a quote card (still image)
+cd remotion && ./node_modules/.bin/remotion still PancracioQuote out/post-01.png --overwrite
 ```
 
-Static assets (images, audio) go in `remotion/public/`. Source code is tracked in git; `node_modules` and render output are gitignored.
+Compositions currently registered — see [`remotion/README.md`](remotion/README.md) for the
+full table and status of each.
+
+Static assets (images, audio, fonts) live in `remotion/public/`. Source code and rendered
+assets Remotion reads at build time are tracked in git; `node_modules/`, `out/`, and `dist/`
+are gitignored.
 
 See `internal-docs/integrations/remotion.md` for full documentation.
 
@@ -92,20 +103,8 @@ See `internal-docs/integrations/remotion.md` for full documentation.
 
 ## `internal-docs/` — Private Runbooks
 
-Not tracked in git. Contains all step-by-step guides:
-
-| File | What it covers |
-|------|----------------|
-| `pipeline/chatgpt-cartoon-prompt.md` | Ready-to-paste GPT-4o prompt with Pancracio color codes |
-| `video-production/character-consistency.md` | Character token + per-tool consistency guides |
-| `video-production/pixverse-meditation-prompt.md` | PixVerse prompts + confirmed working baseline |
-| `video-production/voice-production.md` | Voice history; final voice via ElevenLabs |
-| `social/instagram-post-1.md` | Post 1 caption, hashtags, publishing checklist |
-| `social/next-session-prompt.md` | Paste this at the start of an Instagram publishing session |
-| `social/image-posts.md` | Daily image post workflow |
-| `integrations/remotion.md` | Remotion APIs, workflow, and Claude Code skill setup |
-| `integrations/playwright-mcp.md` | Playwright MCP setup for browser automation |
-| `troubleshooting/common-issues.md` | MCP issues and common gotchas |
+Not tracked in git. Contains all step-by-step guides — see
+[`internal-docs/README.md`](internal-docs/README.md) for the full, maintained index.
 
 ---
 
@@ -113,29 +112,46 @@ Not tracked in git. Contains all step-by-step guides:
 
 **Tracked in git:**
 - `remotion/src/` — video composition source code
-- `remotion/public/pancracio.png` — reference image for Remotion compositions
+- `remotion/public/` — reference images, fonts, and rendered assets Remotion reads at build time
+- `.claude/settings.json`, `skills-lock.json` — Claude Code project config and skill provenance
+- `CLAUDE.md`, `README.md`, `.gitignore`
 
 **Gitignored (local only):**
-- `character/cartoon/` — ChatGPT cartoon variants
-- `image-post/` — ChatGPT image posts
+- `character/cartoon/` — ChatGPT cartoon variants (see the directory-map note above for what's *not* covered)
+- `image-post/` — final composited image posts
+- `video-images/` — raw ChatGPT concept images + layout mockups
 - `posts/` — all post audio/video (MP4, MP3)
 - `internal-docs/` — private runbooks
-- `remotion/node_modules/`, `remotion/out/` — build artifacts
+- `.agents/` — locally-installed agent skill packs
+- `remotion/node_modules/`, `remotion/out/`, `remotion/dist/` — build artifacts
 
 ---
 
-## Active Production Pipeline
+## Active Production Pipelines
 
 ```
-character/highres_initial.png  ← start from this for video
-  → PixVerse (Reference mode, V6, Low motion, 8s)
-  → best candidate + ElevenLabs voice (posts/voice/pancracio_voice.mp3)
-  → Remotion (captions, overlays, branding) — remotion/
+1. Video (Reel) pipeline — ElevenLabs generation, replaced PixVerse
+character/highres_initial.png (eyes closed, single reference frame)
+  → ElevenLabs video generation (credit-limited: ~2 Reel videos/month on current plan)
+  → posts/candidates/ (raw video takes)
+  → best candidate + voice (posts/voice/ — Voicebox preferred for new lines, free)
+  → Remotion (captions, overlays, branding) — remotion/src/
   → posts/post-N/ (final video)
   → Instagram Reel
 
-character/highres_final.png + character/cartoon/
-  → ChatGPT (GPT-4o image gen, character token)
-  → image-post/ (daily image posts)
-  → Instagram post (scheduled via Meta Business Suite)
+2. Image post pipeline (two-layer, batch 3 onward)
+Claude drafts the GPT-4o prompt (character token + scene/props)
+  → pasted into ChatGPT with character/cartoon/cartoon-seated-front.png (reference)
+  → ChatGPT GPT-4o — text-free background plate
+  → character/template_N.png → remotion/public/image-posts/
+  → Remotion `PancracioQuote` still — composites the quote typography
+  → remotion/out/ → image-post/ (final, once approved)
+  → Instagram post (scheduled via Meta Business Suite at 10 AM)
 ```
+
+PixVerse is retired — ElevenLabs now generates the Reel video directly, not just voice; its
+credit plan caps this at ~2 videos/month, so pace Reel work accordingly. Historical PixVerse
+notes live in `internal-docs/video-production/pixverse-meditation-prompt.md`.
+
+GPT-4o does not typeset text reliably, so image posts split character generation from
+typography — see `internal-docs/pipeline/quote-card-compositing.md` for why.
