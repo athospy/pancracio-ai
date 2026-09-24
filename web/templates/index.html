@@ -26,6 +26,7 @@
 
 <section class="filters">
   <form method="get" action="/" class="filter-form">
+    <input type="search" name="q" placeholder="Search title, description, tags..." value="{{ q }}">
     <select name="status" onchange="this.form.submit()">
       <option value="">All statuses</option>
       {% for s in statuses %}
@@ -38,16 +39,35 @@
       <option value="{{ ct }}" {% if ct == active_content_type %}selected{% endif %}>{{ ct|capitalize }}</option>
       {% endfor %}
     </select>
+    <select name="sort" onchange="this.form.submit()">
+      {% for opt in sort_options %}
+      <option value="{{ opt }}" {% if opt == sort %}selected{% endif %}>Sort: {{ opt|capitalize }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn-secondary">Search</button>
   </form>
 </section>
 
 <section class="ideas-list">
   {% if not ideas %}
-  <p class="empty">No ideas yet — add one above.</p>
+  <p class="empty">No ideas match — try clearing filters.</p>
   {% endif %}
   {% for idea in ideas %}
-  {{ idea_card(idea, statuses) }}
+  {{ idea_card(idea, statuses, show_status_control=False) }}
   {% endfor %}
 </section>
+
+{% if total_pages > 1 %}
+<nav class="pagination">
+  {% set base_params = {'q': q, 'status': active_status, 'content_type': active_content_type, 'sort': sort} %}
+  {% if page > 1 %}
+  <a class="btn-secondary" href="/?{{ base_params|urlencode }}&page={{ page - 1 }}">&larr; Prev</a>
+  {% endif %}
+  <span class="muted">Page {{ page }} of {{ total_pages }} ({{ total }} ideas)</span>
+  {% if page < total_pages %}
+  <a class="btn-secondary" href="/?{{ base_params|urlencode }}&page={{ page + 1 }}">Next &rarr;</a>
+  {% endif %}
+</nav>
+{% endif %}
 
 {% endblock %}

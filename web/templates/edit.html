@@ -100,22 +100,22 @@
       {% if post.post_url %} — <a href="{{ post.post_url }}" target="_blank">view post</a>{% endif %}
       {% if post.posted_at %} — posted {{ post.posted_at }}{% endif %}
     </p>
-    <form method="post" action="/posts/{{ post.id }}/metrics" class="metrics-form">
-      <div class="row">
-        <input type="url" name="post_url" placeholder="Post URL" value="{{ post.post_url or '' }}">
-        <input type="text" name="ig_media_id" placeholder="IG media ID" value="{{ post.ig_media_id or '' }}">
-      </div>
-      <div class="row">
-        <input type="number" name="likes" placeholder="Likes" value="{{ post.likes if post.likes is not none else '' }}">
-        <input type="number" name="comments" placeholder="Comments" value="{{ post.comments if post.comments is not none else '' }}">
-        <input type="number" name="views" placeholder="Views" value="{{ post.views if post.views is not none else '' }}">
-      </div>
-      <div class="row">
-        <input type="number" name="shares" placeholder="Shares" value="{{ post.shares if post.shares is not none else '' }}">
-        <input type="number" name="saves" placeholder="Saves" value="{{ post.saves if post.saves is not none else '' }}">
-      </div>
-      <textarea name="notes" placeholder="Notes on audience response" rows="2">{{ post.notes or '' }}</textarea>
-      <button type="submit" class="btn-secondary">Update metrics</button>
+    <p class="muted">Metrics come from Instagram via the API/automation — not editable here.</p>
+    <dl class="metrics-display">
+      <div><dt>IG media ID</dt><dd>{{ post.ig_media_id or '—' }}</dd></div>
+      <div><dt>Likes</dt><dd>{{ post.likes if post.likes is not none else '—' }}</dd></div>
+      <div><dt>Comments</dt><dd>{{ post.comments if post.comments is not none else '—' }}</dd></div>
+      <div><dt>Views</dt><dd>{{ post.views if post.views is not none else '—' }}</dd></div>
+      <div><dt>Shares</dt><dd>{{ post.shares if post.shares is not none else '—' }}</dd></div>
+      <div><dt>Saves</dt><dd>{{ post.saves if post.saves is not none else '—' }}</dd></div>
+    </dl>
+    <form method="post" action="/posts/{{ post.id }}/refresh" class="inline-form">
+      <button type="submit" class="btn-secondary" {% if not post.ig_media_id %}disabled{% endif %}>↻ Refresh from Instagram</button>
+    </form>
+    <form method="post" action="/posts/{{ post.id }}/notes" class="metrics-form">
+      <label class="field-label" for="notes-{{ post.id }}">Notes on audience response</label>
+      <textarea id="notes-{{ post.id }}" name="notes" rows="2">{{ post.notes or '' }}</textarea>
+      <button type="submit" class="btn-secondary">Save notes</button>
     </form>
     {% if post.metrics_updated_at %}<p class="muted">Last updated {{ post.metrics_updated_at }}</p>{% endif %}
   </div>

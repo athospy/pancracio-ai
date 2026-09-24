@@ -6,10 +6,14 @@ Run from web/:
 Then open http://localhost:8000
 """
 
+import json
 import os
 import secrets
 import shutil
 import sqlite3
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +38,15 @@ security = HTTPBasic()
 
 STATUSES = ["idea", "scripted", "ready", "posted", "archived"]
 CONTENT_TYPES = ["video", "image"]
+
+PAGE_SIZE = 20
+SORT_OPTIONS = {
+    "score": "(score IS NULL), score DESC, created_at DESC",
+    "newest": "created_at DESC",
+    "oldest": "created_at ASC",
+    "title": "title COLLATE NOCASE ASC",
+}
+IG_GRAPH_BASE = "https://graph.instagram.com/v21.0"
 
 
 def check_auth(credentials: HTTPBasicCredentials = Depends(security)) -> None:
@@ -90,26 +103,43 @@ def _save_idea_image(idea_id: int, kind: str, upload: UploadFile) -> str:
     return f"/static/uploads/{dest.name}"
 
 
-def _get_ideas(status: Optional[str] = None, content_type: Optional[str] = None) -> list[dict]:
-    query = """
-        SELECT id, title, content_type, description, category, tags,
-               inspiration_source, status, score, scheduled_at,
-               layout_image_path, final_image_path, created_at, updated_at
-        FROM ideas
-        WHERE 1=1
-    """
-    params: list[str] = []
+def _get_ideas(
+    status: Optional[str] = None,
+    content_type: Optional[str] = None,
+    q: Optional[str] = None,
+    sort: str = "score",
+    page: int = 1,
+) -> tuple[list[dict], int]:
+    where = "WHERE 1=1"
+    params: list = []
     if status:
-        query += " AND status = ?"
+        where += " AND status = ?"
         params.append(status)
     if content_type:
-        query += " AND content_type = ?"
+        where += " AND content_type = ?"
         params.append(content_type)
-    query += " ORDER BY (score IS NULL), score DESC, created_at DESC"
+    if q:
+        where += " AND (title LIKE ? OR description LIKE ? OR tags LIKE ?)"
+        like = f"%{q}%"
+        params += [like, like, like]
+
+    order_by = SORT_OPTIONS.get(sort, SORT_OPTIONS["score"])
 
     with _connect() as conn:
-        rows = conn.execute(query, params).fetchall()
-    return [dict(r) for r in rows]
+        total = conn.execute(f"SELECT COUNT(*) AS c FROM ideas {where}", params).fetchone()["c"]
+        rows = conn.execute(
+            f"""
+            SELECT id, title, content_type, description, category, tags,
+                   inspiration_source, status, score, scheduled_at,
+                   layout_image_path, final_image_path, created_at, updated_at
+            FROM ideas
+            {where}
+            ORDER BY {order_by}
+            LIMIT ? OFFSET ?
+            """,
+            params + [PAGE_SIZE, (page - 1) * PAGE_SIZE],
+        ).fetchall()
+    return [dict(r) for r in rows], total
 
 
 def _get_ready_queue() -> list[dict]:
@@ -246,9 +276,16 @@ def index(
     request: Request,
     status: Optional[str] = None,
     content_type: Optional[str] = None,
+    q: Optional[str] = None,
+    sort: str = "score",
+    page: int = 1,
     _: None = Depends(check_auth),
 ):
-    ideas = _get_ideas(status=status, content_type=content_type)
+    page = max(page, 1)
+    ideas, total = _get_ideas(
+        status=status, content_type=content_type, q=q, sort=sort, page=page
+    )
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -258,6 +295,12 @@ def index(
             "content_types": CONTENT_TYPES,
             "active_status": status or "",
             "active_content_type": content_type or "",
+            "q": q or "",
+            "sort": sort,
+            "sort_options": list(SORT_OPTIONS.keys()),
+            "page": page,
+            "total_pages": total_pages,
+            "total": total,
         },
     )
 
@@ -477,6 +520,66 @@ def update_metrics(
             (_str_or_none(post_url), _str_or_none(ig_media_id), _int_or_none(likes),
              _int_or_none(comments), _int_or_none(views), _int_or_none(shares),
              _int_or_none(saves), notes, post_id),
+        )
+        idea_id = row["idea_id"]
+    return RedirectResponse(f"/ideas/{idea_id}/edit", status_code=303)
+
+
+@app.post("/posts/{post_id}/notes")
+def update_post_notes(
+    post_id: int,
+    notes: str = Form(""),
+    _: None = Depends(check_auth),
+):
+    """Notes are the one thing on a post still edited by hand — everything else
+    (metrics, ig_media_id) comes from the API/automation, never this form."""
+    with _connect() as conn:
+        row = conn.execute("SELECT idea_id FROM posts WHERE id = ?", (post_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Post not found")
+        conn.execute("UPDATE posts SET notes = ? WHERE id = ?", (notes, post_id))
+        idea_id = row["idea_id"]
+    return RedirectResponse(f"/ideas/{idea_id}/edit", status_code=303)
+
+
+def _fetch_ig_insights(media_id: str) -> dict[str, int]:
+    token = os.environ.get("IG_ACCESS_TOKEN")
+    if not token:
+        raise HTTPException(status_code=500, detail="IG_ACCESS_TOKEN not configured on the server")
+    params = urllib.parse.urlencode(
+        {"metric": "likes,comments,saved,shares,views", "access_token": token}
+    )
+    url = f"{IG_GRAPH_BASE}/{media_id}/insights?{params}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Instagram API error: {e.read().decode()}")
+    return {item["name"]: item["values"][0]["value"] for item in data.get("data", [])}
+
+
+@app.post("/posts/{post_id}/refresh")
+def refresh_post_metrics(post_id: int, _: None = Depends(check_auth)):
+    """Manual on-demand refresh — pulls current numbers straight from Instagram
+    for this one post, using the same long-lived token the automation will use."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, idea_id, ig_media_id FROM posts WHERE id = ?", (post_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Post not found")
+        if not row["ig_media_id"]:
+            raise HTTPException(status_code=400, detail="This post has no ig_media_id set yet")
+        metrics = _fetch_ig_insights(row["ig_media_id"])
+        conn.execute(
+            """
+            UPDATE posts
+            SET likes = ?, comments = ?, views = ?, shares = ?, saves = ?,
+                metrics_updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (metrics.get("likes"), metrics.get("comments"), metrics.get("views"),
+             metrics.get("shares"), metrics.get("saved"), post_id),
         )
         idea_id = row["idea_id"]
     return RedirectResponse(f"/ideas/{idea_id}/edit", status_code=303)

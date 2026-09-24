@@ -1,5 +1,8 @@
-{% macro idea_card(idea, statuses) %}
+{% macro idea_card(idea, statuses, show_status_control=True) %}
 <article class="idea-card status-{{ idea.status }}">
+  {% if idea.final_image_path %}
+  <a href="/ideas/{{ idea.id }}/edit"><img src="{{ idea.final_image_path }}" alt="Complete post" class="card-thumb"></a>
+  {% endif %}
   <div class="idea-card-head">
     <h3><a href="/ideas/{{ idea.id }}/edit">{{ idea.title }}</a></h3>
     {% if idea.score %}<span class="score">{{ "★" * idea.score }}</span>{% endif %}
@@ -14,6 +17,7 @@
   {% if idea.content_type == 'image' and idea.status == 'ready' and not idea.final_image_path %}
   <p class="warning">⚠️ Marked ready but no final image uploaded yet</p>
   {% endif %}
+  {% if show_status_control %}
   <form method="post" action="/ideas/{{ idea.id }}/status" class="status-bump">
     <input type="hidden" name="redirect_to" value="{{ request.url.path }}">
     <select name="status" onchange="this.form.submit()">
@@ -22,5 +26,6 @@
       {% endfor %}
     </select>
   </form>
+  {% endif %}
 </article>
 {% endmacro %}
