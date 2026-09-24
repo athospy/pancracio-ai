@@ -18,6 +18,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).parent
 DB_PATH = BASE_DIR / "pancracio.db"
@@ -63,6 +64,11 @@ def _connect() -> sqlite3.Connection:
 def _init_db() -> None:
     with _connect() as conn:
         conn.executescript(SCHEMA_PATH.read_text())
+        # schema.sql's CREATE TABLE IF NOT EXISTS won't add columns to a table that
+        # already exists (production has a live posts table predating ig_media_id).
+        existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(posts)")}
+        if "ig_media_id" not in existing_cols:
+            conn.execute("ALTER TABLE posts ADD COLUMN ig_media_id TEXT")
 
 
 @app.on_event("startup")
@@ -436,9 +442,19 @@ def mark_posted(
     return RedirectResponse(f"/ideas/{idea_id}/edit", status_code=303)
 
 
+def _int_or_none(v: str) -> Optional[int]:
+    return int(v) if v.strip() else None
+
+
+def _str_or_none(v: str) -> Optional[str]:
+    return v.strip() if v.strip() else None
+
+
 @app.post("/posts/{post_id}/metrics")
 def update_metrics(
     post_id: int,
+    post_url: str = Form(""),
+    ig_media_id: str = Form(""),
     likes: str = Form(""),
     comments: str = Form(""),
     views: str = Form(""),
@@ -447,9 +463,6 @@ def update_metrics(
     notes: str = Form(""),
     _: None = Depends(check_auth),
 ):
-    def _int_or_none(v: str) -> Optional[int]:
-        return int(v) if v.strip() else None
-
     with _connect() as conn:
         row = conn.execute("SELECT idea_id FROM posts WHERE id = ?", (post_id,)).fetchone()
         if row is None:
@@ -457,15 +470,60 @@ def update_metrics(
         conn.execute(
             """
             UPDATE posts
-            SET likes = ?, comments = ?, views = ?, shares = ?, saves = ?, notes = ?,
-                metrics_updated_at = datetime('now')
+            SET post_url = ?, ig_media_id = ?, likes = ?, comments = ?, views = ?,
+                shares = ?, saves = ?, notes = ?, metrics_updated_at = datetime('now')
             WHERE id = ?
             """,
-            (_int_or_none(likes), _int_or_none(comments), _int_or_none(views),
-             _int_or_none(shares), _int_or_none(saves), notes, post_id),
+            (_str_or_none(post_url), _str_or_none(ig_media_id), _int_or_none(likes),
+             _int_or_none(comments), _int_or_none(views), _int_or_none(shares),
+             _int_or_none(saves), notes, post_id),
         )
         idea_id = row["idea_id"]
     return RedirectResponse(f"/ideas/{idea_id}/edit", status_code=303)
+
+
+class MediaMetricsPayload(BaseModel):
+    likes: Optional[int] = None
+    comments: Optional[int] = None
+    views: Optional[int] = None
+    shares: Optional[int] = None
+    saves: Optional[int] = None
+
+
+@app.get("/api/posts/tracked-media")
+def tracked_media(_: None = Depends(check_auth)) -> list[dict]:
+    """Posts with a known ig_media_id — what the automation should refresh metrics for."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id AS post_id, ig_media_id FROM posts WHERE ig_media_id IS NOT NULL"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/posts/by-media/{media_id}/metrics")
+def update_metrics_by_media_id(
+    media_id: str,
+    payload: MediaMetricsPayload,
+    _: None = Depends(check_auth),
+) -> dict:
+    """Automation writes metrics here by Instagram media ID — updates only, never creates."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM posts WHERE ig_media_id = ?", (media_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Unknown ig_media_id — skipped")
+        conn.execute(
+            """
+            UPDATE posts
+            SET likes = ?, comments = ?, views = ?, shares = ?, saves = ?,
+                metrics_updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (payload.likes, payload.comments, payload.views, payload.shares,
+             payload.saves, row["id"]),
+        )
+    return {"status": "updated", "post_id": row["id"]}
 
 
 @app.get("/settings")

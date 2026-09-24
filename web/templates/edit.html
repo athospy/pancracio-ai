@@ -102,6 +102,10 @@
     </p>
     <form method="post" action="/posts/{{ post.id }}/metrics" class="metrics-form">
       <div class="row">
+        <input type="url" name="post_url" placeholder="Post URL" value="{{ post.post_url or '' }}">
+        <input type="text" name="ig_media_id" placeholder="IG media ID" value="{{ post.ig_media_id or '' }}">
+      </div>
+      <div class="row">
         <input type="number" name="likes" placeholder="Likes" value="{{ post.likes if post.likes is not none else '' }}">
         <input type="number" name="comments" placeholder="Comments" value="{{ post.comments if post.comments is not none else '' }}">
         <input type="number" name="views" placeholder="Views" value="{{ post.views if post.views is not none else '' }}">

@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS posts (
   saves INTEGER,
   notes TEXT,
   metrics_updated_at TEXT,
+  ig_media_id TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
