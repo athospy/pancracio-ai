@@ -14,6 +14,7 @@ import os
 import secrets
 import shutil
 import sqlite3
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1151,6 +1152,29 @@ def _ig_post(path: str, params: dict) -> dict:
         raise HTTPException(status_code=502, detail=f"Instagram API unreachable: {e}")
 
 
+def _wait_for_container_ready(creation_id: str, token: str, timeout: float = 60, interval: float = 3) -> None:
+    """New media containers process asynchronously on Instagram's side (fetching/validating
+    image_url) — publishing immediately after creation can fail with 'Media ID is not
+    available... please wait for a moment' (confirmed on a real publish attempt, not
+    hypothetical). Polls status_code until FINISHED, raises on ERROR/EXPIRED or timeout."""
+    deadline = time.monotonic() + timeout
+    while True:
+        status = _ig_get(f"/{creation_id}", {"fields": "status_code", "access_token": token})
+        code = status.get("status_code")
+        if code == "FINISHED":
+            return
+        if code in ("ERROR", "EXPIRED"):
+            raise HTTPException(
+                status_code=502, detail=f"Instagram media container {code}: {status}"
+            )
+        if time.monotonic() >= deadline:
+            raise HTTPException(
+                status_code=504,
+                detail=f"Instagram media container not ready after {timeout}s (status={code})",
+            )
+        time.sleep(interval)
+
+
 def _publish_to_instagram(idea: dict) -> dict:
     """Returns {"ig_media_id": str, "permalink": str}. Two-step Graph API call: create a media
     container, then publish it. On success, inserts a posts row and marks the idea 'posted' —
@@ -1165,6 +1189,7 @@ def _publish_to_instagram(idea: dict) -> dict:
         "/me/media", {"image_url": image_url, "caption": caption, "access_token": token}
     )
     creation_id = container["id"]
+    _wait_for_container_ready(creation_id, token)
     publish = _ig_post(
         "/me/media_publish", {"creation_id": creation_id, "access_token": token}
     )
