@@ -104,11 +104,14 @@ no book spines with titles, no labels anywhere in the image. This is a backgroun
 that text will be added to later.
 
 Composition — this is critical:
-- The LEFT 45% of the frame must be clean, empty, warm sandy-beige wall. Flat and
+- The LEFT 45% of the frame must be clean, empty, warm sandy-beige wall, running from the
+  very top of the frame down to roughly three-quarters of the way down. Flat and
   uncluttered. No props, no plants, no hard shadows crossing it, no objects intruding.
-  Just softly lit wall with gentle natural gradient.
-- Pancracio sits on the RIGHT side of the frame, on a round woven rattan rug. Calm,
-  unhurried, contemplative.
+  Just softly lit wall with a gentle natural gradient. This is a large area and it must
+  stay completely empty.
+- Pancracio sits on the RIGHT side of the frame, on a round woven rattan rug, positioned in
+  the lower two-thirds of the frame with clear headroom above him — his head and ears must
+  not reach the top of the frame. Calm, unhurried, contemplative.
 - [PROP SWAP — the objects that express this post's quote. Keep them right of centre.]
 - Lower right foreground: a small bonsai in a shallow pot.
 - Lower right: an incense stick burning on stacked smooth stones, thin wisp of smoke.
@@ -122,11 +125,14 @@ the bottom. Warm sandy/beige palette throughout.
 
 ## Filling in [PROP SWAP]
 
-Replace the bracketed line with 1-3 concrete objects/props (right of center, not touching the
-empty left wall) that visually express the idea's quote — e.g. "a phone face-down on the rug,
-screen dark" or "a shopping bag tipped on its side, a receipt spilling out." Pancracio always
-stays seated on the rug in this exact pose — never standing, walking, outdoors, or with other
-characters.
+Replace the bracketed line with 1-3 concrete objects/props that visually express the idea's
+quote. **The line itself must state their position explicitly** — end it with "beside him,"
+"to his right on the rug," or similar — never leave position implicit (an image model reads
+this line on its own, with no awareness of this instruction; "by the door" or "near the edge"
+reads as ambiguous and tends to default to the bottom-left, exactly the zone that must stay
+empty). E.g. "a phone face-down on the rug beside him, screen dark" or "a shopping bag tipped
+on its side to his right, a receipt spilling out." Pancracio always stays seated on the rug in
+this exact pose — never standing, walking, outdoors, or with other characters.
 
 **Text-bearing props need their own explicit callout, not just the generic "no text" line above.**
 If the prop swap includes any of the following, append a dedicated blank-out line for each:

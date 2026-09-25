@@ -53,6 +53,27 @@ If `web/src`/`web/public` (the Remotion project itself, not this service) change
    ufw enable
    ```
 
+## Adaptive text layout
+
+The generated background plates (OpenAI `gpt-image-1`) don't reliably leave the same clear space
+the project's manual ChatGPT-based process did — sometimes the character extends further left
+than expected, which used to make the quote text visually overlap/cut off behind him (a real,
+confirmed defect, not hypothetical — found testing the first real candidate post).
+
+Fixed by scanning the actual generated image before compositing, instead of trusting fixed
+`textWidth`/`quoteFontSize` constants for every render:
+- `_find_safe_text_width()` scans the plate for how much genuinely clear space exists to the
+  right of the text column's left edge, using local pixel variance (`_is_flat_region` — flat =
+  safe, textured/edges = character or prop) rather than a fixed background color, since the
+  frame legitimately contains two different flat materials (wall, wood floor) at different tones.
+- `_fit_text_layout()` scales font size and wrap width down together from the baseline as
+  needed, so the quote also fits vertically — this incidentally fixed a previously-accepted
+  Phase 3 limitation too (a long quote overflowing past the bottom of the frame).
+
+This is why Pillow is now a dependency (`requirements.txt`) — needed for the pixel scan, on top
+of what Remotion itself needs. See `internal-docs/ideas-tracker/auto-publish-checklist.md`'s
+"Post-Phase-4" section for the full investigation and before/after comparisons.
+
 ## Notes
 
 - No auth token on `/render` — the firewall rule is the only access control, since only

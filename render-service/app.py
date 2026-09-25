@@ -17,24 +17,44 @@ from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import FileResponse
+from PIL import Image
 
 app = FastAPI(title="Pancracio Render Service")
 
 REMOTION_DIR = Path.home() / "pancracio-render" / "remotion"
 
-# Fixed layout constants matching PancracioQuote's defaultPancracioQuoteProps — not
-# reinvented per post, matching how the manual process only varies backgroundSrc/quoteLines.
+# Baseline layout matching PancracioQuote's defaultPancracioQuoteProps — used as the
+# starting point/ceiling for the adaptive layout below, not applied unconditionally: the
+# OpenAI-generated plate doesn't reliably leave the same clear space the manual ChatGPT
+# process did (verified — prompt wording alone didn't fix it across several tries), so the
+# text column is sized to whatever space the actual generated image has, per render.
 HEADER_TEXT = "Tiny advice from a serious capybara:"
 ATTRIBUTION = "— pancracio.capy"
-QUOTE_FONT_SIZE = 76
+BASE_QUOTE_FONT_SIZE = 76
 TEXT_LEFT = 78
-TEXT_WIDTH = 470
+BASE_TEXT_WIDTH = 470
 TEXT_TOP = 132
-MAX_LINE_CHARS = 28
+BASE_MAX_LINE_CHARS = 28
+MIN_QUOTE_FONT_SIZE = 36
+MIN_TEXT_WIDTH = 260
 RENDER_TIMEOUT = 120
 
+# Vertical band actually SCANNED for obstructions — deliberately not the full frame height.
+# The frame legitimately contains two different flat materials (wall above, wood floor below,
+# at whatever height the rug/floor line falls in a given generation), and wood grain has real
+# local pixel variance even though it's visually safe to put text over. Scanning that low
+# produced false "obstructed" reads on the *reference* images that are known to be clean.
+# Bounded instead to roughly where text realistically reaches (covers ~6 lines at base font),
+# which stays clear of the floor in every generation tested.
+TEXT_BAND_TOP = 100
+SCAN_BAND_BOTTOM = 700
+# Separate, more generous ceiling for the font-fitting math below — this one only bounds how
+# much vertical room the algorithm is allowed to use before shrinking the font further; it
+# doesn't scan pixels, so the floor-texture problem above doesn't apply to it.
+TEXT_BAND_BOTTOM = 1100
 
-def _wrap_quote_line(quote_line: str, max_chars: int = MAX_LINE_CHARS) -> list[str]:
+
+def _wrap_quote_line(quote_line: str, max_chars: int) -> list[str]:
     """Simple word-wrap by character count — no existing wrapping logic in this codebase
     to follow. max_chars tuned by eye against real renders (see spec-phase-3.md Open Items)."""
     words = quote_line.split()
@@ -52,6 +72,76 @@ def _wrap_quote_line(quote_line: str, max_chars: int = MAX_LINE_CHARS) -> list[s
     return lines
 
 
+def _is_flat_region(pixels, x: int, y: int, threshold: int = 20) -> bool:
+    """Low local pixel variance = an uncluttered surface (wall or floor, whatever tone), high
+    variance = an edge or textured object (character fur, prop silhouette, shadow boundary).
+    Deliberately not a fixed-color match — the frame legitimately contains two different flat
+    materials (wall, wood floor) at two different base tones, so "matches this one sampled
+    color" was the wrong test (verified: it flagged the reference images' own clean wall-floor
+    transition as an obstruction)."""
+    neighbors = [pixels[x + dx, y + dy] for dx in (-3, 0, 3) for dy in (-3, 0, 3)]
+    for channel in range(3):
+        values = [p[channel] for p in neighbors]
+        if max(values) - min(values) > threshold:
+            return False
+    return True
+
+
+def _find_safe_text_width(image_path: Path) -> int:
+    """The plate's actual clear space varies per generation (verified: neither more explicit
+    composition wording nor more explicit prop-position wording made the character/props land
+    in the same place every time) — scan the image itself rather than trusting a fixed layout.
+
+    Scans columns rightward from TEXT_LEFT for the first column with any non-flat pixel in the
+    scan band, using local variance (see _is_flat_region) rather than a fixed background color.
+    Returns a safe width, capped to BASE_TEXT_WIDTH (never wider than the original design) and
+    floored at MIN_TEXT_WIDTH (below that, shrinking further stops helping readability)."""
+    img = Image.open(image_path).convert("RGB")
+    width, height = img.size
+    pixels = img.load()
+
+    # -4 margin on both axes so _is_flat_region's dx/dy=+3 neighbor lookups never read past
+    # the image edge — only matters for a plate shorter/narrower than today's fixed 1122x1402,
+    # but the x-scan already needed this guard, so the y-scan should have it too.
+    band_bottom = min(SCAN_BAND_BOTTOM, height - 4)
+    safe_right = TEXT_LEFT
+    for x in range(TEXT_LEFT, min(width - 4, TEXT_LEFT + BASE_TEXT_WIDTH + 100)):
+        column_clear = all(
+            _is_flat_region(pixels, x, y) for y in range(TEXT_BAND_TOP, band_bottom, 8)
+        )
+        if not column_clear:
+            break
+        safe_right = x
+
+    safe_width = safe_right - TEXT_LEFT - 20  # small buffer before whatever isn't flat
+    return max(MIN_TEXT_WIDTH, min(BASE_TEXT_WIDTH, safe_width))
+
+
+def _fit_text_layout(quote_line: str, safe_width: int) -> tuple[int, int, list[str]]:
+    """Scales font size and wrap width down from the baseline together (never independently —
+    a narrower column needs both smaller text and shorter lines) until the wrapped quote fits
+    the vertical band, or MIN_QUOTE_FONT_SIZE is reached. Returns (font_size, text_width, lines)."""
+    scale = min(1.0, safe_width / BASE_TEXT_WIDTH)
+    font_size = max(MIN_QUOTE_FONT_SIZE, round(BASE_QUOTE_FONT_SIZE * scale))
+    # Budget for everything in PancracioQuote.tsx besides the quote lines themselves, so the
+    # font-fit loop below doesn't let the quote block push the attribution off the frame:
+    # 26 * 1.35 - header text's own line height (fontSize 26, lineHeight 1.35)
+    # 50         - Divider's vertical margin between header and quote
+    # 38         - gap above the attribution line (its marginTop)
+    # 27         - attribution line's own approximate height (its fontSize)
+    available_height = TEXT_BAND_BOTTOM - TEXT_TOP - 26 * 1.35 - 50 - 38 - 27
+
+    while True:
+        # Characters-per-line scales with width available and inversely with font size —
+        # both change together as font_size is reduced below, so recompute each pass.
+        max_chars = max(10, round(BASE_MAX_LINE_CHARS * (safe_width / BASE_TEXT_WIDTH) * (BASE_QUOTE_FONT_SIZE / font_size)))
+        lines = _wrap_quote_line(quote_line, max_chars)
+        needed_height = len(lines) * font_size * 1.12
+        if needed_height <= available_height or font_size <= MIN_QUOTE_FONT_SIZE:
+            return font_size, safe_width, lines
+        font_size = max(MIN_QUOTE_FONT_SIZE, font_size - 6)
+
+
 @app.post("/render")
 def render(
     background_url: str = Form(...),
@@ -65,14 +155,17 @@ def render(
     except (urllib.error.URLError, OSError) as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch background image: {e}")
 
+    safe_width = _find_safe_text_width(local_bg)
+    quote_font_size, text_width, quote_lines = _fit_text_layout(quote_line, safe_width)
+
     props = {
         "backgroundSrc": f"image-posts/idea-{idea_id}.png",
-        "quoteLines": _wrap_quote_line(quote_line),
+        "quoteLines": quote_lines,
         "headerText": HEADER_TEXT,
         "attribution": ATTRIBUTION,
-        "quoteFontSize": QUOTE_FONT_SIZE,
+        "quoteFontSize": quote_font_size,
         "textLeft": TEXT_LEFT,
-        "textWidth": TEXT_WIDTH,
+        "textWidth": text_width,
         "textTop": TEXT_TOP,
     }
     props_path = Path(f"/tmp/props-{idea_id}.json")
