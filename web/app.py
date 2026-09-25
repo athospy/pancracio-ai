@@ -26,7 +26,6 @@ from typing import Optional
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image
@@ -202,9 +201,9 @@ Return ONLY a JSON object, no markdown fencing, no commentary before or after:
 
 def _resolve_session_user(request: Request) -> Optional[dict]:
     """Look up the caller's session cookie or bearer token against `sessions`,
-    with no fallback and no raising — used by get_current_user() (which adds the
-    Basic Auth fallback and 401s) and by the nav-bar "logged in as" display
-    (which just wants None on anything unresolved, never an error)."""
+    with no fallback and no raising — used by get_current_user() (which 401s on
+    failure) and by the nav-bar "logged in as" display (which just wants None on
+    anything unresolved, never an error)."""
     token = None
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
@@ -222,42 +221,17 @@ def _resolve_session_user(request: Request) -> Optional[dict]:
     return dict(row) if row else None
 
 
-def get_current_user(
-    request: Request,
-    credentials: Optional[HTTPBasicCredentials] = Depends(HTTPBasic(auto_error=False)),
-) -> Optional[dict]:
-    """Gate every route. Accepts a session cookie, a bearer token (both resolved
-    against `sessions` — a browser session and n8n's long-lived token are the same
-    kind of row), or, transitionally, the legacy shared Basic Auth pair. The
-    Basic Auth branch is removed entirely once the new system is verified live
-    (see docs/ideation/pancracio-user-accounts/spec-phase-3.md) — until then it
-    returns None (no real user row exists for that path), which callers that log
-    attribution (Phase 2) must tolerate.
+def get_current_user(request: Request) -> dict:
+    """Gate every route. Accepts a session cookie or a bearer token (both
+    resolved against `sessions` — a browser session and n8n's long-lived token
+    are the same kind of row). The legacy shared Basic Auth fallback that lived
+    here through Phase 1/2 is gone — see
+    docs/ideation/pancracio-user-accounts/spec-phase-3.md.
     """
-    has_token = request.headers.get("authorization", "").startswith("Bearer ") or (
-        "pancracio_session" in request.cookies
-    )
-    if has_token:
-        user = _resolve_session_user(request)
-        if user:
-            return user
-        raise HTTPException(status_code=401, detail="Invalid or revoked session")
-
-    # Legacy fallback — deleted in Phase 3. Unlike the old check_auth(), an unset
-    # PANCRACIO_AUTH_USER/PASS just means this branch is unavailable, not a 500 —
-    # that's the correct behavior to be moving toward as those env vars go away.
-    expected_user = os.environ.get("PANCRACIO_AUTH_USER")
-    expected_pass = os.environ.get("PANCRACIO_AUTH_PASS")
-    if credentials and expected_user and expected_pass:
-        user_ok = secrets.compare_digest(credentials.username, expected_user)
-        pass_ok = secrets.compare_digest(credentials.password, expected_pass)
-        if user_ok and pass_ok:
-            return None
-    raise HTTPException(
-        status_code=401,
-        detail="Not authenticated",
-        headers={"WWW-Authenticate": "Basic"},
-    )
+    user = _resolve_session_user(request)
+    if user:
+        return user
+    raise HTTPException(status_code=401, detail="Not authenticated")
 
 
 @app.middleware("http")
@@ -962,7 +936,7 @@ def index(
     q: Optional[str] = None,
     sort: str = "score",
     page: int = 1,
-    _: Optional[dict] = Depends(get_current_user),
+    _: dict = Depends(get_current_user),
 ):
     page = max(page, 1)
     ideas, total = _get_ideas(
@@ -989,7 +963,7 @@ def index(
 
 
 @app.get("/queue")
-def queue_page(request: Request, _: Optional[dict] = Depends(get_current_user)):
+def queue_page(request: Request, _: dict = Depends(get_current_user)):
     ideas = _get_ready_queue()
     return templates.TemplateResponse(
         request, "queue.html", {"ideas": ideas, "statuses": STATUSES}
@@ -997,7 +971,7 @@ def queue_page(request: Request, _: Optional[dict] = Depends(get_current_user)):
 
 
 @app.get("/stats")
-def stats_page(request: Request, _: Optional[dict] = Depends(get_current_user)):
+def stats_page(request: Request, _: dict = Depends(get_current_user)):
     by_category = _get_stats_by_category()
     by_content_type = _get_stats_by_content_type()
     by_score = _get_stats_by_score()
@@ -1025,7 +999,7 @@ def create_idea(
     category: str = Form(""),
     tags: str = Form(""),
     inspiration_source: str = Form(""),
-    user: Optional[dict] = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
     with _connect() as conn:
         conn.execute(
@@ -1048,7 +1022,7 @@ def create_idea(
 
 
 @app.get("/ideas/{idea_id}/edit")
-def edit_idea_form(idea_id: int, request: Request, _: Optional[dict] = Depends(get_current_user)):
+def edit_idea_form(idea_id: int, request: Request, _: dict = Depends(get_current_user)):
     idea = _get_idea(idea_id)
     posts = _get_posts_for_idea(idea_id)
     activity = _get_idea_activity(idea_id)
@@ -1082,7 +1056,7 @@ def update_idea(
     caption: str = Form(""),
     hashtags: str = Form(""),
     auto_publish: bool = Form(False),
-    user: Optional[dict] = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
     score_value = int(score) if score else None
     if auto_publish and not scheduled_at:
@@ -1121,7 +1095,7 @@ def upload_idea_images(
     idea_id: int,
     layout_image: UploadFile = File(None),
     final_image: UploadFile = File(None),
-    _: Optional[dict] = Depends(get_current_user),
+    _: dict = Depends(get_current_user),
 ):
     _get_idea(idea_id)  # 404s if missing
     updates: dict[str, str] = {}
@@ -1145,7 +1119,7 @@ def bump_status(
     idea_id: int,
     status: str = Form(...),
     redirect_to: str = Form("/"),
-    _: Optional[dict] = Depends(get_current_user),
+    _: dict = Depends(get_current_user),
 ):
     if status not in STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
@@ -1162,7 +1136,7 @@ def bump_status(
 
 
 @app.get("/ideas/{idea_id}/post")
-def mark_posted_form(idea_id: int, request: Request, _: Optional[dict] = Depends(get_current_user)):
+def mark_posted_form(idea_id: int, request: Request, _: dict = Depends(get_current_user)):
     idea = _get_idea(idea_id)
     return templates.TemplateResponse(
         request, "log_post.html", {"idea": idea}
@@ -1175,7 +1149,7 @@ def mark_posted(
     platform: str = Form("instagram"),
     post_url: str = Form(""),
     posted_at: str = Form(""),
-    user: Optional[dict] = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
     _get_idea(idea_id)  # 404s if missing
     with _connect() as conn:
@@ -1213,7 +1187,7 @@ def update_metrics(
     shares: str = Form(""),
     saves: str = Form(""),
     notes: str = Form(""),
-    _: Optional[dict] = Depends(get_current_user),
+    _: dict = Depends(get_current_user),
 ):
     with _connect() as conn:
         row = conn.execute("SELECT idea_id FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -1238,7 +1212,7 @@ def update_metrics(
 def update_post_notes(
     post_id: int,
     notes: str = Form(""),
-    _: Optional[dict] = Depends(get_current_user),
+    _: dict = Depends(get_current_user),
 ):
     """Notes are the one thing on a post still edited by hand — everything else
     (metrics, ig_media_id) comes from the API/automation, never this form."""
@@ -1354,7 +1328,7 @@ def _publish_to_instagram(idea: dict) -> dict:
 
 
 @app.post("/posts/{post_id}/refresh")
-def refresh_post_metrics(post_id: int, _: Optional[dict] = Depends(get_current_user)):
+def refresh_post_metrics(post_id: int, _: dict = Depends(get_current_user)):
     """Manual on-demand refresh — pulls current numbers straight from Instagram
     for this one post, using the same long-lived token the automation will use."""
     with _connect() as conn:
@@ -1389,7 +1363,7 @@ class MediaMetricsPayload(BaseModel):
 
 
 @app.get("/api/posts/tracked-media")
-def tracked_media(_: Optional[dict] = Depends(get_current_user)) -> list[dict]:
+def tracked_media(_: dict = Depends(get_current_user)) -> list[dict]:
     """Posts with a known ig_media_id — what the automation should refresh metrics for."""
     with _connect() as conn:
         rows = conn.execute(
@@ -1402,7 +1376,7 @@ def tracked_media(_: Optional[dict] = Depends(get_current_user)) -> list[dict]:
 def update_metrics_by_media_id(
     media_id: str,
     payload: MediaMetricsPayload,
-    _: Optional[dict] = Depends(get_current_user),
+    _: dict = Depends(get_current_user),
 ) -> dict:
     """Automation writes metrics here by Instagram media ID — updates only, never creates."""
     with _connect() as conn:
@@ -1462,24 +1436,24 @@ def api_list_ideas(
     register: Optional[str] = None,
     auto_publish: Optional[bool] = None,
     due: Optional[bool] = None,
-    _: Optional[dict] = Depends(get_current_user),
+    _: dict = Depends(get_current_user),
 ) -> list[dict]:
     return _get_ideas_api(status=status, register=register, auto_publish=auto_publish, due=due)
 
 
 @app.get("/api/ideas/{idea_id}")
-def api_get_idea(idea_id: int, _: Optional[dict] = Depends(get_current_user)) -> dict:
+def api_get_idea(idea_id: int, _: dict = Depends(get_current_user)) -> dict:
     return _get_idea(idea_id)  # 404s if missing
 
 
 @app.get("/internal/register-counts")
-def internal_register_counts(_: Optional[dict] = Depends(get_current_user)) -> dict:
+def internal_register_counts(_: dict = Depends(get_current_user)) -> dict:
     """Debugging aid — current rolling reframe/observational counts."""
     return _get_recent_register_counts()
 
 
 @app.post("/internal/draft-prompt")
-def internal_draft_prompt(idea_id: int = Form(...), _: Optional[dict] = Depends(get_current_user)) -> dict:
+def internal_draft_prompt(idea_id: int = Form(...), _: dict = Depends(get_current_user)) -> dict:
     idea = _get_idea(idea_id)  # 404s if missing
     counts = _get_recent_register_counts()
     drafted = _draft_plate_prompt(idea, counts)
@@ -1499,12 +1473,12 @@ def internal_draft_prompt(idea_id: int = Form(...), _: Optional[dict] = Depends(
 
 
 @app.post("/internal/originality-check")
-def internal_originality_check(line: str = Form(...), _: Optional[dict] = Depends(get_current_user)) -> dict:
+def internal_originality_check(line: str = Form(...), _: dict = Depends(get_current_user)) -> dict:
     return _check_originality(line)
 
 
 @app.post("/internal/visual-quality-check")
-def internal_visual_quality_check(idea_id: int = Form(...), _: Optional[dict] = Depends(get_current_user)) -> dict:
+def internal_visual_quality_check(idea_id: int = Form(...), _: dict = Depends(get_current_user)) -> dict:
     idea = _get_idea(idea_id)  # 404s if missing
     if not idea.get("final_image_path"):
         raise HTTPException(status_code=400, detail="Idea has no final_image_path yet")
@@ -1514,7 +1488,7 @@ def internal_visual_quality_check(idea_id: int = Form(...), _: Optional[dict] = 
 
 @app.post("/internal/generate-plate")
 def internal_generate_plate(
-    idea_id: int = Form(...), prompt: str = Form(...), _: Optional[dict] = Depends(get_current_user)
+    idea_id: int = Form(...), prompt: str = Form(...), _: dict = Depends(get_current_user)
 ) -> dict:
     _get_idea(idea_id)  # 404s if missing
     path = _generate_plate_image(idea_id, prompt)
@@ -1522,7 +1496,7 @@ def internal_generate_plate(
 
 
 @app.post("/internal/draft-caption")
-def internal_draft_caption(idea_id: int = Form(...), _: Optional[dict] = Depends(get_current_user)) -> dict:
+def internal_draft_caption(idea_id: int = Form(...), _: dict = Depends(get_current_user)) -> dict:
     idea = _get_idea(idea_id)  # 404s if missing
     drafted = _draft_caption(idea)
     with _connect() as conn:
@@ -1596,12 +1570,12 @@ def _run_auto_publish_pipeline(idea_id: int, user: Optional[dict] = None) -> dic
 
 
 @app.post("/internal/run-pipeline/{idea_id}")
-def run_pipeline(idea_id: int, user: Optional[dict] = Depends(get_current_user)) -> dict:
+def run_pipeline(idea_id: int, user: dict = Depends(get_current_user)) -> dict:
     return _run_auto_publish_pipeline(idea_id, user)
 
 
 @app.get("/settings")
-def settings_page(request: Request, _: Optional[dict] = Depends(get_current_user)):
+def settings_page(request: Request, _: dict = Depends(get_current_user)):
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -1614,7 +1588,7 @@ def settings_page(request: Request, _: Optional[dict] = Depends(get_current_user
 @app.post("/settings/character-reference")
 def upload_character_reference(
     reference_image: UploadFile = File(...),
-    _: Optional[dict] = Depends(get_current_user),
+    _: dict = Depends(get_current_user),
 ):
     ext = Path(reference_image.filename or "").suffix.lower()
     if ext not in ALLOWED_IMAGE_EXTS:
