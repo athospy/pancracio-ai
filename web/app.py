@@ -38,8 +38,17 @@ SCHEMA_PATH = BASE_DIR / "schema.sql"
 UPLOAD_DIR = BASE_DIR / "static" / "uploads"
 ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
+# Generated plate images live alongside the Remotion project (so Phase 3's rendering step reads
+# them with no special-casing vs. manually-produced plates), not under web/static/uploads/ — but
+# they still need to be HTTP-fetchable so the render VPS can download them, hence this second
+# mount. Created eagerly since StaticFiles checks the directory exists at mount time, and nothing
+# else creates this path before the first plate is generated.
+REMOTION_IMAGE_POSTS_DIR = BASE_DIR.parent / "remotion" / "public" / "image-posts"
+REMOTION_IMAGE_POSTS_DIR.mkdir(parents=True, exist_ok=True)
+
 app = FastAPI(title="Pancracio Ideas Tracker")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+app.mount("/image-posts", StaticFiles(directory=REMOTION_IMAGE_POSTS_DIR), name="image-posts")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 security = HTTPBasic()
@@ -70,6 +79,12 @@ OPENAI_IMAGE_QUALITY = "medium"
 OPENAI_IMAGE_INPUT_FIDELITY = "high"  # preserves reference-image face/detail; gpt-image-1 only
 OPENAI_IMAGE_GEN_SIZE = "1024x1536"  # closest supported portrait size to our 4:5 target
 PLATE_TARGET_SIZE = (1122, 1402)  # exact 4:5 frame Remotion's PancracioQuote composition expects
+
+# Render service (render-service/app.py) on the dedicated render VPS. Firewalled to only accept
+# connections from charmander's IP — see internal-docs/ideas-tracker/auto-publish-credentials.md.
+RENDER_VPS_HOST = "bulbasaur.santiagomorel.dev"
+RENDER_VPS_PORT = 8090
+TRACKER_PUBLIC_BASE = "https://pancracio-ideas.santiagomorel.dev"
 
 # Verbatim source: internal-docs/pipeline/auto-publish-prompt-template.md (not deployed to the
 # VPS — internal-docs/ is gitignored — so the real text has to live here; keep both in sync).
@@ -201,13 +216,15 @@ def _migrate_ideas_status_check(conn: sqlite3.Connection) -> None:
           hashtags TEXT,
           auto_publish INTEGER NOT NULL DEFAULT 0,
           register TEXT,
+          quote_line TEXT,
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         INSERT INTO ideas_new SELECT
           id, title, content_type, description, category, tags, inspiration_source,
           status, score, layout_image_path, final_image_path, image_prompt,
-          scheduled_at, caption, hashtags, auto_publish, register, created_at, updated_at
+          scheduled_at, caption, hashtags, auto_publish, register, quote_line,
+          created_at, updated_at
         FROM ideas;
         DROP TABLE ideas;
         ALTER TABLE ideas_new RENAME TO ideas;
@@ -229,9 +246,11 @@ def _init_db() -> None:
             conn.execute("ALTER TABLE ideas ADD COLUMN auto_publish INTEGER NOT NULL DEFAULT 0")
         if "register" not in existing_idea_cols:
             conn.execute("ALTER TABLE ideas ADD COLUMN register TEXT")
+        if "quote_line" not in existing_idea_cols:
+            conn.execute("ALTER TABLE ideas ADD COLUMN quote_line TEXT")
 
-        # Must run after the two guards above so ideas_new's INSERT ... SELECT
-        # (which names auto_publish/register explicitly) is valid on first deploy too.
+        # Must run after the guards above so ideas_new's INSERT ... SELECT
+        # (which names auto_publish/register/quote_line explicitly) is valid on first deploy too.
         _migrate_ideas_status_check(conn)
 
 
@@ -241,17 +260,20 @@ def on_startup() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _save_idea_image(idea_id: int, kind: str, upload: UploadFile) -> str:
-    ext = Path(upload.filename or "").suffix.lower()
+def _write_idea_image(idea_id: int, kind: str, ext: str, data: bytes) -> str:
     if ext not in ALLOWED_IMAGE_EXTS:
         raise HTTPException(status_code=400, detail=f"Unsupported image type: {ext or 'unknown'}")
     # Remove any previous file for this idea/kind in case the extension changed.
     for existing in UPLOAD_DIR.glob(f"idea_{idea_id}_{kind}.*"):
         existing.unlink()
     dest = UPLOAD_DIR / f"idea_{idea_id}_{kind}{ext}"
-    with dest.open("wb") as f:
-        shutil.copyfileobj(upload.file, f)
+    dest.write_bytes(data)
     return f"/static/uploads/{dest.name}"
+
+
+def _save_idea_image(idea_id: int, kind: str, upload: UploadFile) -> str:
+    ext = Path(upload.filename or "").suffix.lower()
+    return _write_idea_image(idea_id, kind, ext, upload.file.read())
 
 
 def _get_ideas(
@@ -378,6 +400,27 @@ def _anthropic_messages(
     return resp.json()
 
 
+def _extract_json_object(text: str) -> dict:
+    """Models sometimes wrap JSON in markdown code fences, or (for tool-augmented calls like
+    the originality check's web search) narrate their search process before the final JSON
+    despite explicit instructions not to — a plain "first { to last }" span breaks if that
+    narration itself contains a brace. Tries "last { to end" first (correct when narration with
+    its own braces precedes a clean trailing JSON object), then falls back to "first { to last
+    }" (correct for a bare object wrapped only in a markdown fence). Raises ValueError on no
+    match, same as a bare json.loads would, so callers can catch both the same way."""
+    if "{" not in text:
+        raise ValueError("no '{' found in text")
+    candidates = [(text.rindex("{"), len(text))]
+    if "}" in text:
+        candidates.append((text.index("{"), text.rindex("}") + 1))
+    for start, end in candidates:
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            continue
+    raise ValueError(f"no valid JSON object found in text: {text[:300]!r}")
+
+
 def _draft_plate_prompt(idea: dict, register_counts: dict[str, int]) -> dict:
     """Returns {"prompt": str, "register": "reframe"|"observational", "quote_line": str}"""
     reframe_n = register_counts.get("reframe", 0)
@@ -393,12 +436,61 @@ def _draft_plate_prompt(idea: dict, register_counts: dict[str, int]) -> dict:
     result = _anthropic_messages(system=PLATE_PROMPT_SYSTEM, user=user)
     text = "".join(b["text"] for b in result.get("content", []) if b.get("type") == "text")
     try:
-        parsed = json.loads(text)
+        parsed = _extract_json_object(text)
         if (
             not isinstance(parsed, dict)
             or not isinstance(parsed.get("prompt"), str)
             or parsed.get("register") not in ("reframe", "observational")
             or not isinstance(parsed.get("quote_line"), str)
+        ):
+            raise ValueError("missing/invalid required keys")
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(status_code=502, detail=f"Anthropic returned unexpected shape: {text[:500]}")
+    return parsed
+
+
+# Verbatim source: internal-docs/social/image-posts.md's "Caption Format" section — same
+# not-deployed-to-the-VPS reasoning as PLATE_PROMPT_SYSTEM above.
+CAPTION_SYSTEM = """\
+You draft Instagram captions for Pancracio, a capybara plush toy character. Each post's IMAGE
+already carries a dry, deadpan quote in the on-image typography — the caption you write is a
+DIFFERENT, separate piece of text with a different register.
+
+Key rule: the caption is openly motivational -- forward-driving, imperatives are fine, it pushes
+the reader toward action. This is a deliberate contrast with the dry on-image quote. Do not write
+cozy/withdrawn captions ("stay home, drink tea") -- that reads as passive. Motivational means
+agency and direction.
+
+Do NOT repeat the on-image quote verbatim -- the image already carries it. Extend the idea: one
+line that adds a beat the image doesn't (a small concrete example, or the thought that comes
+right after the quote).
+
+Always use this exact hashtag set, unchanged:
+#capybara #pancracio #mindfulness #calm #plushie #wisdom #zen #capybaras
+
+Return ONLY a JSON object, no markdown fencing, no other text:
+{"caption": "<the one-line caption text, no hashtags in this field>",
+ "hashtags": "#capybara #pancracio #mindfulness #calm #plushie #wisdom #zen #capybaras"}
+"""
+
+
+def _draft_caption(idea: dict) -> dict:
+    """Returns {"caption": str, "hashtags": str}"""
+    user = (
+        f"Idea title: {idea['title']}\n"
+        f"On-image quote (the caption must NOT repeat this): {idea.get('quote_line') or '(none)'}\n"
+        f"Register: {idea.get('register') or '(unknown)'}\n\n"
+        "Return ONLY the JSON object described in your instructions, no markdown fencing, "
+        "no other text."
+    )
+    result = _anthropic_messages(system=CAPTION_SYSTEM, user=user)
+    text = "".join(b["text"] for b in result.get("content", []) if b.get("type") == "text")
+    try:
+        parsed = _extract_json_object(text)
+        if (
+            not isinstance(parsed, dict)
+            or not isinstance(parsed.get("caption"), str)
+            or not isinstance(parsed.get("hashtags"), str)
         ):
             raise ValueError("missing/invalid required keys")
     except (ValueError, json.JSONDecodeError):
@@ -436,7 +528,7 @@ def _check_originality(line: str) -> dict:
         text = "".join(
             b["text"] for b in result.get("content", []) if b.get("type") == "text"
         ).strip()
-        parsed = json.loads(text[text.rindex("{"):])
+        parsed = _extract_json_object(text)
         if not isinstance(parsed, dict) or not isinstance(parsed.get("flagged"), bool):
             raise ValueError("missing/invalid 'flagged' key")
         flagged = parsed["flagged"]
@@ -521,9 +613,7 @@ def _generate_plate_image(idea_id: int, prompt: str) -> str:
     raw = base64.b64decode(data["data"][0]["b64_json"])
     cropped = _crop_to_target(raw)
 
-    out_dir = BASE_DIR.parent / "remotion" / "public" / "image-posts"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    dest = out_dir / f"idea-{idea_id}.png"
+    dest = REMOTION_IMAGE_POSTS_DIR / f"idea-{idea_id}.png"
     dest.write_bytes(cropped)
     rel_path = f"remotion/public/image-posts/idea-{idea_id}.png"
 
@@ -533,6 +623,36 @@ def _generate_plate_image(idea_id: int, prompt: str) -> str:
             (rel_path, idea_id),
         )
     return rel_path
+
+
+def _render_post_image(idea: dict) -> str:
+    """Calls the render service to composite the quote card over the plate image, saves the
+    result via the existing image-save convention. Called in-process from Phase 4's
+    orchestrator, not exposed as its own internal endpoint — nothing to test in isolation here
+    beyond what the render service's own feedback loop already covers."""
+    if not idea.get("quote_line"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Idea {idea['id']} has no quote_line — /internal/draft-prompt must run first",
+        )
+    background_url = f"{TRACKER_PUBLIC_BASE}/image-posts/idea-{idea['id']}.png"
+    resp = httpx.post(
+        f"http://{RENDER_VPS_HOST}:{RENDER_VPS_PORT}/render",
+        data={
+            "background_url": background_url,
+            "quote_line": idea["quote_line"],
+            "idea_id": idea["id"],
+        },
+        timeout=150,  # a little over the render service's own 120s subprocess timeout
+    )
+    resp.raise_for_status()
+    path = _write_idea_image(idea["id"], "final", ".png", resp.content)
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE ideas SET final_image_path = ?, updated_at = datetime('now') WHERE id = ?",
+            (path, idea["id"]),
+        )
+    return path
 
 
 def _get_posts_for_idea(idea_id: int) -> list[dict]:
@@ -1027,7 +1147,20 @@ def internal_register_counts(_: None = Depends(check_auth)) -> dict:
 def internal_draft_prompt(idea_id: int = Form(...), _: None = Depends(check_auth)) -> dict:
     idea = _get_idea(idea_id)  # 404s if missing
     counts = _get_recent_register_counts()
-    return _draft_plate_prompt(idea, counts)
+    drafted = _draft_plate_prompt(idea, counts)
+    # Persisted so later pipeline steps (rendering, Phase 4's orchestrator) can read
+    # register/quote_line/image_prompt straight off the idea row instead of threading them
+    # through as call arguments across a chain of separate HTTP calls.
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE ideas SET register = ?, quote_line = ?, image_prompt = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (drafted["register"], drafted["quote_line"], drafted["prompt"], idea_id),
+        )
+    return drafted
 
 
 @app.post("/internal/originality-check")
@@ -1042,6 +1175,18 @@ def internal_generate_plate(
     _get_idea(idea_id)  # 404s if missing
     path = _generate_plate_image(idea_id, prompt)
     return {"idea_id": idea_id, "layout_image_path": path}
+
+
+@app.post("/internal/draft-caption")
+def internal_draft_caption(idea_id: int = Form(...), _: None = Depends(check_auth)) -> dict:
+    idea = _get_idea(idea_id)  # 404s if missing
+    drafted = _draft_caption(idea)
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE ideas SET caption = ?, hashtags = ?, updated_at = datetime('now') WHERE id = ?",
+            (drafted["caption"], drafted["hashtags"], idea_id),
+        )
+    return drafted
 
 
 @app.get("/settings")

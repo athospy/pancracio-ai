@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS ideas (
   hashtags TEXT,
   auto_publish INTEGER NOT NULL DEFAULT 0,
   register TEXT,
+  quote_line TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
