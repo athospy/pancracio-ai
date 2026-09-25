@@ -14,6 +14,7 @@
     {% if idea.scheduled_at %}<span class="pill scheduled">📅 {{ idea.scheduled_at | replace("T", " ") }}</span>{% endif %}
   </div>
   {% if idea.description %}<p class="idea-desc">{{ idea.description }}</p>{% endif %}
+  {% if idea.created_by_username %}<span class="added-by">added by {{ idea.created_by_username }}</span>{% endif %}
   {% if idea.content_type == 'image' and idea.status == 'ready' and not idea.final_image_path %}
   <p class="warning">⚠️ Marked ready but no final image uploaded yet</p>
   {% endif %}

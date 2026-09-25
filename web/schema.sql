@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS ideas (
   auto_publish INTEGER NOT NULL DEFAULT 0,
   register TEXT,
   quote_line TEXT,
+  created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -65,6 +66,21 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- One row per logged action (edit, auto_publish toggle, publish, mark-posted).
+-- idea_id is nullable only for future-proofing (a non-idea-scoped action) —
+-- every call site today always passes one. No CHECK-constrained action enum:
+-- the vocabulary is enforced at the Python call sites instead, since a CHECK
+-- change here would need the same table-rebuild dance as ideas.status above,
+-- not worth the ceremony for 4 known action types.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  idea_id INTEGER REFERENCES ideas(id),
+  action TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas(status);
 CREATE INDEX IF NOT EXISTS idx_posts_idea_id ON posts(idea_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_idea_id ON audit_log(idea_id);

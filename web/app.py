@@ -82,10 +82,10 @@ CONTENT_TYPES = ["video", "image"]
 
 PAGE_SIZE = 20
 SORT_OPTIONS = {
-    "score": "(score IS NULL), score DESC, created_at DESC",
-    "newest": "created_at DESC",
-    "oldest": "created_at ASC",
-    "title": "title COLLATE NOCASE ASC",
+    "score": "(ideas.score IS NULL), ideas.score DESC, ideas.created_at DESC",
+    "newest": "ideas.created_at DESC",
+    "oldest": "ideas.created_at ASC",
+    "title": "ideas.title COLLATE NOCASE ASC",
 }
 IG_GRAPH_BASE = "https://graph.instagram.com/v21.0"
 
@@ -307,6 +307,7 @@ def _migrate_ideas_status_check(conn: sqlite3.Connection) -> None:
           auto_publish INTEGER NOT NULL DEFAULT 0,
           register TEXT,
           quote_line TEXT,
+          created_by INTEGER REFERENCES users(id),
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -314,7 +315,7 @@ def _migrate_ideas_status_check(conn: sqlite3.Connection) -> None:
           id, title, content_type, description, category, tags, inspiration_source,
           status, score, layout_image_path, final_image_path, image_prompt,
           scheduled_at, caption, hashtags, auto_publish, register, quote_line,
-          created_at, updated_at
+          created_by, created_at, updated_at
         FROM ideas;
         DROP TABLE ideas;
         ALTER TABLE ideas_new RENAME TO ideas;
@@ -338,6 +339,8 @@ def _init_db() -> None:
             conn.execute("ALTER TABLE ideas ADD COLUMN register TEXT")
         if "quote_line" not in existing_idea_cols:
             conn.execute("ALTER TABLE ideas ADD COLUMN quote_line TEXT")
+        if "created_by" not in existing_idea_cols:
+            conn.execute("ALTER TABLE ideas ADD COLUMN created_by INTEGER REFERENCES users(id)")
 
         # Must run after the guards above so ideas_new's INSERT ... SELECT
         # (which names auto_publish/register/quote_line explicitly) is valid on first deploy too.
@@ -392,10 +395,13 @@ def _get_ideas(
         total = conn.execute(f"SELECT COUNT(*) AS c FROM ideas {where}", params).fetchone()["c"]
         rows = conn.execute(
             f"""
-            SELECT id, title, content_type, description, category, tags,
-                   inspiration_source, status, score, scheduled_at,
-                   layout_image_path, final_image_path, created_at, updated_at
+            SELECT ideas.id, ideas.title, ideas.content_type, ideas.description,
+                   ideas.category, ideas.tags, ideas.inspiration_source, ideas.status,
+                   ideas.score, ideas.scheduled_at, ideas.layout_image_path,
+                   ideas.final_image_path, ideas.created_at, ideas.updated_at,
+                   users.username AS created_by_username
             FROM ideas
+            LEFT JOIN users ON users.id = ideas.created_by
             {where}
             ORDER BY {order_by}
             LIMIT ? OFFSET ?
@@ -423,10 +429,46 @@ def _get_ready_queue() -> list[dict]:
 
 def _get_idea(idea_id: int) -> dict:
     with _connect() as conn:
-        row = conn.execute("SELECT * FROM ideas WHERE id = ?", (idea_id,)).fetchone()
+        row = conn.execute(
+            """
+            SELECT ideas.*, users.username AS created_by_username
+            FROM ideas
+            LEFT JOIN users ON users.id = ideas.created_by
+            WHERE ideas.id = ?
+            """,
+            (idea_id,),
+        ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Idea not found")
     return dict(row)
+
+
+def _get_idea_activity(idea_id: int) -> list[dict]:
+    """audit_log rows for one idea's Activity section, newest first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT audit_log.action, audit_log.created_at, users.username
+            FROM audit_log
+            JOIN users ON users.id = audit_log.user_id
+            WHERE audit_log.idea_id = ?
+            ORDER BY audit_log.id DESC
+            """,
+            (idea_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _log_action(conn: sqlite3.Connection, user: Optional[dict], idea_id: int, action: str) -> None:
+    """Records one audit_log row. Silently no-ops (not an error) when `user` is
+    None — the legacy Basic-Auth fallback (removed in Phase 3) has no real user
+    row to attribute to."""
+    if user is None:
+        return
+    conn.execute(
+        "INSERT INTO audit_log (user_id, idea_id, action) VALUES (?, ?, ?)",
+        (user["id"], idea_id, action),
+    )
 
 
 def _get_setting(key: str) -> Optional[str]:
@@ -983,15 +1025,24 @@ def create_idea(
     category: str = Form(""),
     tags: str = Form(""),
     inspiration_source: str = Form(""),
-    _: Optional[dict] = Depends(get_current_user),
+    user: Optional[dict] = Depends(get_current_user),
 ):
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO ideas (title, content_type, description, category, tags, inspiration_source)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO ideas
+                (title, content_type, description, category, tags, inspiration_source, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (title, content_type, description, category, tags, inspiration_source),
+            (
+                title,
+                content_type,
+                description,
+                category,
+                tags,
+                inspiration_source,
+                user["id"] if user else None,
+            ),
         )
     return RedirectResponse("/", status_code=303)
 
@@ -1000,12 +1051,14 @@ def create_idea(
 def edit_idea_form(idea_id: int, request: Request, _: Optional[dict] = Depends(get_current_user)):
     idea = _get_idea(idea_id)
     posts = _get_posts_for_idea(idea_id)
+    activity = _get_idea_activity(idea_id)
     return templates.TemplateResponse(
         request,
         "edit.html",
         {
             "idea": idea,
             "posts": posts,
+            "activity": activity,
             "statuses": STATUSES,
             "content_types": CONTENT_TYPES,
             "character_reference_image": _get_setting("character_reference_image"),
@@ -1029,12 +1082,19 @@ def update_idea(
     caption: str = Form(""),
     hashtags: str = Form(""),
     auto_publish: bool = Form(False),
-    _: Optional[dict] = Depends(get_current_user),
+    user: Optional[dict] = Depends(get_current_user),
 ):
     score_value = int(score) if score else None
     if auto_publish and not scheduled_at:
         scheduled_at = _default_scheduled_at()
     with _connect() as conn:
+        prior = conn.execute(
+            "SELECT auto_publish FROM ideas WHERE id = ?", (idea_id,)
+        ).fetchone()
+        if prior is None:
+            raise HTTPException(status_code=404, detail="Idea not found")
+        auto_publish_changed = bool(prior["auto_publish"]) != auto_publish
+
         cur = conn.execute(
             """
             UPDATE ideas
@@ -1048,8 +1108,11 @@ def update_idea(
              status, score_value, image_prompt, scheduled_at or None, caption, hashtags,
              1 if auto_publish else 0, idea_id),
         )
-    if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Idea not found")
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Idea not found")
+        _log_action(conn, user, idea_id, "edit")
+        if auto_publish_changed:
+            _log_action(conn, user, idea_id, "auto_publish_toggle")
     return RedirectResponse(f"/ideas/{idea_id}/edit", status_code=303)
 
 
@@ -1112,7 +1175,7 @@ def mark_posted(
     platform: str = Form("instagram"),
     post_url: str = Form(""),
     posted_at: str = Form(""),
-    _: Optional[dict] = Depends(get_current_user),
+    user: Optional[dict] = Depends(get_current_user),
 ):
     _get_idea(idea_id)  # 404s if missing
     with _connect() as conn:
@@ -1127,6 +1190,7 @@ def mark_posted(
             "UPDATE ideas SET status = 'posted', updated_at = datetime('now') WHERE id = ?",
             (idea_id,),
         )
+        _log_action(conn, user, idea_id, "mark_posted")
     return RedirectResponse(f"/ideas/{idea_id}/edit", status_code=303)
 
 
@@ -1469,7 +1533,7 @@ def internal_draft_caption(idea_id: int = Form(...), _: Optional[dict] = Depends
     return drafted
 
 
-def _run_auto_publish_pipeline(idea_id: int) -> dict:
+def _run_auto_publish_pipeline(idea_id: int, user: Optional[dict] = None) -> dict:
     """Draft -> originality check -> generate plate -> render -> visual quality check -> draft
     caption -> publish, as one unit: any exception marks the idea 'failed' and stops, no retry,
     no partial-success ambiguity. Called in-process from Phase 2/3's plain functions (not their
@@ -1519,6 +1583,8 @@ def _run_auto_publish_pipeline(idea_id: int) -> dict:
         idea = {**idea, **caption}
 
         result = _publish_to_instagram(idea)
+        with _connect() as conn:
+            _log_action(conn, user, idea_id, "publish")
         return {"status": "posted", **result}
     except Exception as e:
         with _connect() as conn:
@@ -1530,8 +1596,8 @@ def _run_auto_publish_pipeline(idea_id: int) -> dict:
 
 
 @app.post("/internal/run-pipeline/{idea_id}")
-def run_pipeline(idea_id: int, _: Optional[dict] = Depends(get_current_user)) -> dict:
-    return _run_auto_publish_pipeline(idea_id)
+def run_pipeline(idea_id: int, user: Optional[dict] = Depends(get_current_user)) -> dict:
+    return _run_auto_publish_pipeline(idea_id, user)
 
 
 @app.get("/settings")
