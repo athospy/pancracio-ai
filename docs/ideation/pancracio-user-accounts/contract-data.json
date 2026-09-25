@@ -1,0 +1,247 @@
+{
+  "projectName": "Pancracio User Accounts & Login",
+  "slug": "pancracio-user-accounts",
+  "date": "2026-09-25",
+  "status": "Approved",
+  "supersedes": null,
+  "gates": {
+    "dimensions": [
+      {
+        "key": "problem",
+        "label": "Problem Clarity",
+        "status": "ready",
+        "evidence": "web/app.py's check_auth() (line 181) gates all 26 routes behind one shared PANCRACIO_AUTH_USER/PASS env-var pair, checked with no per-caller identity; n8n's own 'credential' is confirmed to be that same shared pair wrapped in an n8n object, so today there is zero identity separation between the human user and the automation, no login page (native Basic Auth popup only), no logout, and no record of who created or changed which idea."
+      },
+      {
+        "key": "goals",
+        "label": "Goal Definition",
+        "status": "ready",
+        "evidence": "Four concrete, checkable goals: (1) every idea and its key later actions are attributable to a specific account; (2) a real login page + logout replace the Basic Auth popup; (3) n8n keeps running its hourly pipeline unattended, authenticated via its own account instead of the shared pair; (4) zero lockout incidents during cutover, enforced by a phased deploy with an explicit live-verification checkpoint before the old auth is removed."
+      },
+      {
+        "key": "criteria",
+        "label": "Success Criteria",
+        "status": "ready",
+        "evidence": "Every criterion pairs a runnable, self-asserting command (curl + test/grep, sqlite3 + test) or an explicitly named judgment call with each goal; the verification environment (local scratch instance, venv interpreter, port 8000) is named explicitly in Phase 1's notes after a critic pass caught unassertive checks and an unnamed environment in the first draft."
+      },
+      {
+        "key": "scope",
+        "label": "Scope Boundaries",
+        "status": "ready",
+        "evidence": "MVP is explicit (users/sessions/login/logout, account provisioning, multi-scheme auth dependency, n8n's static-credential cutover, created_by + audit_log + per-idea Activity section, final Basic Auth removal); stretch (self-service password reset, roles, rate-limiting) and out-of-scope (/static and /image-posts auth changes, VPS/n8n-admin auth, 2FA) are each named with a reason."
+      },
+      {
+        "key": "consistency",
+        "label": "Consistency",
+        "status": "ready",
+        "evidence": "The one real contradiction surfaced mid-interview — 'n8n should authenticate the same way as humans' vs. 'keep it as simple as possible, don't disrupt what's working' — was resolved explicitly: n8n gets its own account and mints a token via the same /login endpoint, but as a one-time setup step stored as a static credential (not a per-run login), which serves both the 'same mechanism' goal and the 'don't add risk to a live pipeline' constraint at once."
+      }
+    ]
+  },
+  "problem": [
+    "The Pancracio ideas tracker (web/app.py, https://pancracio-ideas.santiagomorel.dev) gates every route behind a single shared HTTP Basic Auth username/password pair, read from PANCRACIO_AUTH_USER/PANCRACIO_AUTH_PASS env vars and compared with secrets.compare_digest — no hashing, no per-user rows, one credential for every caller.",
+    "n8n's automated hourly publishing pipeline authenticates against the same routes using an n8n Credential that simply wraps that identical shared pair — there is no distinction today between the human user and the automation from the app's point of view.",
+    "There is no login page (the browser's native Basic Auth popup is the only UI), no real logout (only clearing browser-cached credentials achieves that), and no way to tell which account created or later changed a given idea — as the tracker moves toward multiple human users and more automated integrations sharing this one identity, that gap gets worse, not better.",
+    "This is a live, production system that already publishes real content to Instagram on a real budget (see docs/ideation/pancracio-auto-publish/) via an hourly n8n workflow with no manual step today — any auth change risks a real lockout of either the human or the automation if done carelessly."
+  ],
+  "goals": [
+    "Every idea, and the key actions taken on it after creation (edit, auto_publish toggle, publish/mark-posted), is attributable to a specific account — verifiable by querying the idea's created_by and its audit_log rows, and by seeing that history rendered on the idea itself.",
+    "The Basic Auth popup is replaced by a real login page with working logout — verifiable by requesting any gated route with no session and observing a login prompt instead of a browser-native popup, and by confirming a session is invalidated after logout.",
+    "n8n's hourly auto-publish pipeline keeps running unattended after cutover, authenticated via its own account instead of the shared credential pair — verifiable by a real, successful n8n execution against the new auth mechanism.",
+    "The cutover from Basic Auth to the new system causes zero lockout incidents for either the human user or n8n — enforced structurally by deploying the new system alongside the still-working Basic Auth, verifying both paths live, and only then removing Basic Auth in a separate, smaller follow-up deploy."
+  ],
+  "successCriteria": [
+    {
+      "criterion": "A password can be hashed and verified without adding a new third-party dependency",
+      "check": {
+        "cmd": "web/venv/bin/python3 -c \"from web.app import hash_password, verify_password; h = hash_password('test123'); assert verify_password('test123', h); assert not verify_password('wrong', h); print('OK')\"",
+        "expect": "prints OK and exits 0 — uses web/venv's interpreter, not bare python3, since fastapi/httpx aren't installed at the system level"
+      }
+    },
+    {
+      "criterion": "POST /login with valid credentials creates a sessions row, sets a session cookie, and returns a bearer token in the JSON body; invalid credentials return 401 and create no session",
+      "check": {
+        "cmd": "code=$(curl -s -o /tmp/r.json -w '%{http_code}' -c /tmp/c.txt -d 'username=<test-user>&password=<test-pass>' http://127.0.0.1:8000/login); test \"$code\" = 200 && grep -q token /tmp/r.json && test -s /tmp/c.txt; bad=$(curl -s -o /dev/null -w '%{http_code}' -d 'username=<test-user>&password=wrong' http://127.0.0.1:8000/login); test \"$bad\" = 401",
+        "expect": "both compound commands exit 0 — valid login returns 200 with a token in the body and a non-empty cookie jar; wrong password returns 401"
+      }
+    },
+    {
+      "criterion": "A previously check_auth-gated route accepts EITHER the new session cookie, a bearer token in the Authorization header, or (only until the final phase) the legacy Basic Auth pair — and rejects a request presenting none of the three",
+      "check": {
+        "cmd": "c1=$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/c.txt http://127.0.0.1:8000/api/ideas); c2=$(curl -s -o /dev/null -w '%{http_code}' -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:8000/api/ideas); c3=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/ideas); test \"$c1\" = 200 -a \"$c2\" = 200 -a \"$c3\" = 401",
+        "expect": "exits 0 — cookie and bearer token both return 200, no credential returns 401"
+      }
+    },
+    {
+      "criterion": "POST /logout invalidates the session — a subsequent request reusing the same cookie is rejected",
+      "check": {
+        "cmd": "curl -s -b /tmp/c.txt -c /tmp/c.txt -X POST http://127.0.0.1:8000/logout -o /dev/null; code=$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/c.txt http://127.0.0.1:8000/api/ideas); test \"$code\" = 401",
+        "expect": "exits 0 — the same cookie is rejected after logout"
+      }
+    },
+    {
+      "criterion": "Creating an idea via POST /ideas records created_by as the authenticated user's id, visible via a direct DB query and in the idea's UI",
+      "check": {
+        "cmd": "val=$(sqlite3 <scratch-db-copy> \"SELECT created_by FROM ideas ORDER BY id DESC LIMIT 1;\"); test -n \"$val\"",
+        "expect": "exits 0 — created_by is non-empty (not NULL) for the most recently created idea"
+      }
+    },
+    {
+      "criterion": "Editing an idea, toggling auto_publish, and marking an idea posted each write an audit_log row naming the actor, the action, and the idea",
+      "check": {
+        "cmd": "count=$(sqlite3 <scratch-db-copy> \"SELECT COUNT(*) FROM audit_log WHERE idea_id=<test-idea-id> AND action IN ('edit','auto_publish_toggle','mark_posted');\"); test \"$count\" = 3",
+        "expect": "exits 0 — exactly one audit_log row per action type for the test idea"
+      }
+    },
+    {
+      "criterion": "The idea edit page's Activity section actually renders the audit_log rows for that idea, not just the underlying table",
+      "check": {
+        "cmd": "n=$(curl -s -b /tmp/c.txt http://127.0.0.1:8000/ideas/<test-idea-id>/edit | grep -c 'data-activity-row'); test \"$n\" -ge 3",
+        "expect": "exits 0 — at least 3 activity rows appear in the rendered HTML, matching the 3 audit_log rows from the criterion above (spec defines the data-activity-row marker on each rendered row)"
+      }
+    },
+    {
+      "criterion": "n8n's own account has a long-lived bearer token, minted once and stored as a static n8n Credential (mirroring today's static Basic Auth credential), and the workflow completes a real execution end-to-end against the deployed tracker using it",
+      "check": {
+        "judgment": "trigger the workflow manually in the n8n UI after the static bearer-token Credential is configured, and review its execution log for a successful run with no auth errors on either HTTP Request node"
+      }
+    },
+    {
+      "criterion": "After the final phase removes Basic Auth acceptance, a request using the old PANCRACIO_AUTH_USER/PANCRACIO_AUTH_PASS pair is rejected, and the pipeline still runs successfully via the new mechanism alone",
+      "check": {
+        "cmd": "code=$(curl -s -o /dev/null -w '%{http_code}' -u '<old-user>:<old-pass>' http://127.0.0.1:8000/api/ideas); test \"$code\" = 401",
+        "expect": "exits 0 — the old pair is no longer accepted"
+      }
+    },
+    {
+      "criterion": "No lockout incident occurs during cutover — both the human login and n8n's new flow are confirmed working live before Basic Auth is removed",
+      "check": {
+        "judgment": "human confirms both the browser login/logout flow and a real n8n execution succeeded in production before approving the final Basic Auth removal phase"
+      }
+    }
+  ],
+  "scope": {
+    "mvp": [
+      { "item": "users table + stdlib-only password hashing (hashlib.pbkdf2_hmac + secrets), no new dependency", "reason": "Core identity model; stdlib is enough for a 2-3 account tool and avoids adding a dependency to a small production app." },
+      { "item": "Account provisioning: a web/scripts/create_user.py script or a documented sqlite3-INSERT runbook step (no self-registration, no admin UI) to create the human account(s) and n8n's account", "reason": "Phase 1's own login success criteria and n8n's cutover both require these accounts to exist first — a hidden-dependency gap in the first draft of this plan. Matches the SSH/script-based operational model already chosen for password reset." },
+      { "item": "sessions table (id/token, user_id, created_at, no expiry) — doubles as n8n's bearer token", "reason": "Chosen over a signed stateless cookie so sessions are revocable (delete the row) and n8n's token can literally be a sessions row, making 'same mechanism for humans and n8n' concretely true. No TTL/rotation, since nothing in the goals asks for it — see decisions." },
+      { "item": "POST /login (sets session cookie + returns bearer token in JSON) and POST /logout", "reason": "The one endpoint both browsers and n8n use, consumed differently by each — no separate bolted-on API-key system." },
+      { "item": "GET /login page (real form, tiny inline fetch-based JS) replacing the Basic Auth popup", "reason": "The stated UX complaint — no login page, no real logout." },
+      { "item": "get_current_user dependency accepting session cookie, bearer token, or (temporarily) legacy Basic Auth; swapped in for every existing Depends(check_auth) site", "reason": "Backwards-compatible during the phased cutover — nothing existing breaks the moment this deploys." },
+      { "item": "n8n's own account with a bearer token minted once and stored as a static n8n httpHeaderAuth Credential (not a per-run login step)", "reason": "Achieves 'n8n authenticates via its own account, same endpoint as humans' without adding an authentication round-trip (and a new failure mode) to every one of ~24 unattended hourly executions — an over-engineering finding from plan review, folded in." },
+      { "item": "created_by column on ideas (added via an ALTER TABLE ADD COLUMN migration guard, following the same PRAGMA table_info pattern _init_db() already uses for posts.ig_media_id), populated at creation, shown in the UI", "reason": "The core ask — 'check which idea is added by a user.' The migration step is named explicitly after a hidden-dependency finding: schema.sql's CREATE TABLE IF NOT EXISTS alone would not add this column to the live production table." },
+      { "item": "audit_log table + logging on edit / auto_publish toggle / publish / mark-posted, surfaced as a per-idea Activity section on the edit page", "reason": "User explicitly widened scope from creation-only back to 'creation + key later actions' after an initial simpler framing. The UI-rendering half now has its own success criterion after a plan-review finding that the table alone wasn't checked." },
+      { "item": "Final phase: remove Basic Auth acceptance from get_current_user, after a live-verified gate", "reason": "The actual point of the project — the shared credential goes away, but only once nothing depends on it anymore." }
+    ],
+    "full": [],
+    "stretch": [
+      { "item": "Self-service password reset flow (email-based)", "reason": "Deferred — no email infrastructure exists; SSH/script-based reset matches the existing operational model for a 1-2 person tool." },
+      { "item": "Role-based permissions (e.g. n8n restricted to /internal + /api only)", "reason": "Deferred — user explicitly chose flat access; nothing in the stated problems (UX, visibility) requires an authorization model." },
+      { "item": "Rate-limiting / lockout on repeated failed logins", "reason": "Deferred — user explicitly called this out of scope; not a regression since today's Basic Auth has none either." }
+    ],
+    "outOfScope": [
+      { "item": "Changing the /static and /image-posts unauthenticated mounts (e.g. to signed/expiring URLs)", "reason": "Confirmed load-bearing for Instagram's server-side image fetch and the render VPS; user explicitly froze this. Research this session also confirmed Instagram's fetch can't carry auth headers at all, so no auth scheme (only a signed-URL scheme) could ever cover it — moot for this project either way." },
+      { "item": "VPS SSH access, n8n's own admin login/UI", "reason": "Different systems entirely — this project covers only the pancracio-ideas app's own API auth, per explicit scope confirmation." },
+      { "item": "Two-factor authentication", "reason": "Never raised as a need; single/small user base." }
+    ],
+    "future": [
+      "Self-service password reset if the account list grows beyond people who already have SSH access",
+      "Role-based permissions if a lower-trust integration is ever added",
+      "Rate limiting if failed-login abuse is ever actually observed",
+      "Session/token expiry and rotation if the account list or trust model ever changes"
+    ]
+  },
+  "decisions": [
+    {
+      "decision": "DB-backed sessions table for both browser cookies and n8n's bearer token",
+      "rejected": "Signed stateless cookie (itsdangerous)",
+      "reason": "Needs real revocation and a natural join target for audit logging; a sessions row is also literally what n8n's bearer token is, which is what makes 'same mechanism for humans and n8n' concretely true rather than just stated."
+    },
+    {
+      "decision": "Password reset via SSH/script, no self-service flow",
+      "rejected": "Email-based self-service password reset",
+      "reason": "No email infrastructure exists in this project; matches the SSH-based operational model already used for everything else on this tool."
+    },
+    {
+      "decision": "Flat permissions — any authenticated account has full access",
+      "rejected": "Role-based permissions (e.g. n8n restricted to /internal + /api only)",
+      "reason": "Not what the stated problems (UX, visibility/attribution) call for; adds an authorization model nobody asked for."
+    },
+    {
+      "decision": "No rate-limiting or lockout on failed logins",
+      "rejected": "Basic per-IP rate-limiting",
+      "reason": "Not a regression versus today's Basic Auth, which also has none; user's stated pain points were UX and visibility, not this."
+    },
+    {
+      "decision": "n8n gets its own account and authenticates via a bearer token minted once (through the same /login endpoint humans use) and stored as a static n8n Credential — not a per-run login step inside the workflow",
+      "rejected": "A Login node inserted into the hourly workflow, capturing a fresh token on every one of ~24 daily executions",
+      "reason": "Plan review (over-engineering lens) caught that the sessions table has no expiry, so re-authenticating on every run adds a new failure mode to a live pipeline for no benefit. A one-time-minted static token, referenced by an n8n Credential exactly like today's Basic Auth credential, satisfies both 'n8n authenticates via its own account through the same mechanism' and 'don't disrupt what's already working' at once — the two things that were in tension mid-interview."
+    },
+    {
+      "decision": "Sessions/tokens don't expire automatically (no TTL column); revocation is manual (logout deletes the row; a lost or compromised n8n token is revoked by deleting its row directly)",
+      "rejected": "Time-limited tokens with rotation",
+      "reason": "Nothing in the goals asks for rotation or expiry; matches the 'keep it simple' instruction and the existing SSH-based manual-recovery model already used for password reset. Named explicitly (rather than left implicit) since it's a real security-relevant absence, not an oversight."
+    },
+    {
+      "decision": "Audit coverage extends to edit / auto_publish toggle / publish / mark-posted, not just idea creation",
+      "rejected": "Creation-only attribution (a created_by column, no audit_log table)",
+      "reason": "User explicitly widened scope back to 'creation + key later actions' after initially signaling a simpler, creation-only cut."
+    },
+    {
+      "decision": "Phased cutover: deploy the new auth system alongside the still-working Basic Auth first, verify both paths live (human login/logout, a real n8n execution), then remove Basic Auth in a separate, smaller follow-up deploy behind an explicit human-verified gate",
+      "rejected": "A single deploy that swaps everything at once",
+      "reason": "Directly matches 'don't disrupt what's already working' — avoids risking a lockout on a live, budget-spending Instagram-publishing pipeline with no fallback if something's wrong."
+    },
+    {
+      "decision": "Password hashing via Python's stdlib (hashlib.pbkdf2_hmac + secrets), no new dependency",
+      "rejected": "passlib or bcrypt (third-party library)",
+      "reason": "web/requirements.txt currently has zero auth-related dependencies; stdlib PBKDF2 is sufficient for this account volume (2-3 users) and keeps a small production tool's dependency surface unchanged."
+    },
+    {
+      "decision": "Attribution surfaced as a per-idea 'Activity' section (audit_log rows filtered to that idea, shown inline on the edit page) instead of a dedicated audit-log page",
+      "rejected": "A standalone audit-log/admin page listing actions across all ideas",
+      "reason": "Matches the 'mostly a UI enhancement' framing — surfaces attribution where the user is already looking (the idea itself) without adding a new page/nav item nothing asked for."
+    },
+    {
+      "decision": "internal-docs updates (deployment-runbook.md, auto-publish-credentials.md, a new doc describing the auth model) are folded into each phase's own notes rather than listed as a separate MVP scope item",
+      "rejected": "A standalone 'update internal-docs' MVP scope bullet",
+      "reason": "Plan review (scope-creep lens) correctly noted a standalone doc-update item didn't trace to any stated goal or success criterion. Docs still get updated (matches this project's established convention), just as part of the phase that changes the thing being documented, not as its own goal-justified deliverable."
+    }
+  ],
+  "execution": {
+    "strategy": "Sequential",
+    "phases": [
+      {
+        "title": "Users, Sessions & Login",
+        "risk": "medium",
+        "blocking": true,
+        "specPath": "docs/ideation/pancracio-user-accounts/spec-phase-1.md",
+        "notes": "Adds users/sessions tables and stdlib password hashing, an account-provisioning script/runbook step (creates the human and n8n accounts), POST /login + /logout, a real login page, and a get_current_user dependency that accepts a session cookie, a bearer token, OR (temporarily) the legacy Basic Auth pair. Swaps every existing Depends(check_auth) site to the new dependency. Mints a long-lived bearer token for n8n's account once and stores it as a static n8n Credential (no Login node in the workflow). Backwards compatible throughout — Basic Auth keeps working, so nothing existing breaks during this phase. Verification during this phase and Phase 2 runs against a local scratch instance (web/venv/bin/python3 -m uvicorn app:app --port 8000, a copied pancracio.db, matching env vars) — mirrors this project's established scratch-DB testing convention; live curl checks against the production URL happen manually after each real deploy. Update deployment-runbook.md and auto-publish-credentials.md to describe the new account/credential model as part of this phase."
+      },
+      {
+        "title": "Attribution & Audit Log",
+        "risk": "low",
+        "blocking": false,
+        "prereqs": ["Users, Sessions & Login"],
+        "specPath": "docs/ideation/pancracio-user-accounts/spec-phase-2.md",
+        "notes": "Adds created_by on ideas via an explicit ALTER TABLE ADD COLUMN migration guard (same PRAGMA table_info pattern _init_db() already uses for posts.ig_media_id — schema.sql's CREATE TABLE IF NOT EXISTS alone will not add this column to the live table) and an audit_log table logging edit / auto_publish toggle / publish / mark-posted events, each naming the actor. Surfaces a per-idea Activity section in the UI (each row carries a data-activity-row marker so it's checkable) rather than a separate audit page."
+      },
+      {
+        "title": "Verify live cutover before removing Basic Auth",
+        "kind": "gate",
+        "risk": "low",
+        "blocking": true,
+        "prereqs": ["Users, Sessions & Login", "Attribution & Audit Log"],
+        "notes": "Human checkpoint, not a code phase: confirm in production that browser login/logout works, and that n8n's static-credential token has completed at least one real hourly run successfully with no auth errors. Only proceed to the final phase once both are actually confirmed working live — this is the entire point of the phased-cutover decision above."
+      },
+      {
+        "title": "Remove Legacy Basic Auth",
+        "risk": "high",
+        "blocking": true,
+        "prereqs": ["Verify live cutover before removing Basic Auth"],
+        "specPath": "docs/ideation/pancracio-user-accounts/spec-phase-3.md",
+        "notes": "Deletes the Basic-Auth-acceptance branch from get_current_user, removes the now-retired PANCRACIO_AUTH_USER/PASS env vars from the deployment docs (the actual credential file on charmander is a manual SSH edit, out of the automated deploy). Update deployment-runbook.md and auto-publish-credentials.md to reflect the final state as part of this phase. Small diff, but the real point-of-no-return for the old shared credential — hence high risk despite the small footprint."
+      }
+    ]
+  }
+}

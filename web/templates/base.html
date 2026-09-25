@@ -13,10 +13,23 @@
       <a href="/queue" class="settings-link">Queue</a>
       <a href="/stats" class="settings-link">Stats</a>
       <a href="/settings" class="settings-link">Settings</a>
+      {% if request.state.user %}
+      <span class="settings-link">logged in as {{ request.state.user.username }}</span>
+      <a href="#" id="logout-link" class="settings-link">Log out</a>
+      {% endif %}
     </nav>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
+  {% if request.state.user %}
+  <script>
+    document.getElementById("logout-link").addEventListener("click", async (e) => {
+      e.preventDefault();
+      await fetch("/logout", { method: "POST" });
+      window.location = "/login";
+    });
+  </script>
+  {% endif %}
 </body>
 </html>

@@ -48,5 +48,23 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- id is the credential value itself (a random token), not a surrogate key —
+-- a browser's session cookie and n8n's long-lived bearer token are both just
+-- rows in this table, looked up the same way. No expiry: revocation is
+-- deleting the row (logout, or a manual DB delete for a lost/compromised token).
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas(status);
 CREATE INDEX IF NOT EXISTS idx_posts_idea_id ON posts(idea_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
