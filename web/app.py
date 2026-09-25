@@ -36,7 +36,7 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 security = HTTPBasic()
 
-STATUSES = ["idea", "scripted", "ready", "posted", "archived"]
+STATUSES = ["idea", "scripted", "ready", "posted", "archived", "failed"]
 CONTENT_TYPES = ["video", "image"]
 
 PAGE_SIZE = 20
@@ -74,6 +74,49 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_ideas_status_check(conn: sqlite3.Connection) -> None:
+    """SQLite can't ALTER a CHECK constraint in place — rebuild the table to add
+    'failed' to ideas.status's allowed values. Idempotent via a string match on
+    the live table definition, so re-running _init_db() never repeats this."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='ideas'"
+    ).fetchone()
+    if row and "'failed'" in row["sql"]:
+        return  # already migrated
+    conn.executescript("""
+        CREATE TABLE ideas_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          content_type TEXT NOT NULL DEFAULT 'video' CHECK (content_type IN ('image', 'video')),
+          description TEXT,
+          category TEXT,
+          tags TEXT,
+          inspiration_source TEXT,
+          status TEXT NOT NULL DEFAULT 'idea'
+            CHECK (status IN ('idea', 'scripted', 'ready', 'posted', 'archived', 'failed')),
+          score INTEGER CHECK (score BETWEEN 1 AND 5),
+          layout_image_path TEXT,
+          final_image_path TEXT,
+          image_prompt TEXT,
+          scheduled_at TEXT,
+          caption TEXT,
+          hashtags TEXT,
+          auto_publish INTEGER NOT NULL DEFAULT 0,
+          register TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO ideas_new SELECT
+          id, title, content_type, description, category, tags, inspiration_source,
+          status, score, layout_image_path, final_image_path, image_prompt,
+          scheduled_at, caption, hashtags, auto_publish, register, created_at, updated_at
+        FROM ideas;
+        DROP TABLE ideas;
+        ALTER TABLE ideas_new RENAME TO ideas;
+        CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas(status);
+    """)
+
+
 def _init_db() -> None:
     with _connect() as conn:
         conn.executescript(SCHEMA_PATH.read_text())
@@ -82,6 +125,16 @@ def _init_db() -> None:
         existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(posts)")}
         if "ig_media_id" not in existing_cols:
             conn.execute("ALTER TABLE posts ADD COLUMN ig_media_id TEXT")
+
+        existing_idea_cols = {row["name"] for row in conn.execute("PRAGMA table_info(ideas)")}
+        if "auto_publish" not in existing_idea_cols:
+            conn.execute("ALTER TABLE ideas ADD COLUMN auto_publish INTEGER NOT NULL DEFAULT 0")
+        if "register" not in existing_idea_cols:
+            conn.execute("ALTER TABLE ideas ADD COLUMN register TEXT")
+
+        # Must run after the two guards above so ideas_new's INSERT ... SELECT
+        # (which names auto_publish/register explicitly) is valid on first deploy too.
+        _migrate_ideas_status_check(conn)
 
 
 @app.on_event("startup")
@@ -627,6 +680,42 @@ def update_metrics_by_media_id(
              payload.saves, row["id"]),
         )
     return {"status": "updated", "post_id": row["id"]}
+
+
+def _get_ideas_api(
+    status: Optional[str] = None,
+    register: Optional[str] = None,
+    auto_publish: Optional[bool] = None,
+) -> list[dict]:
+    where = "WHERE 1=1"
+    params: list = []
+    if status:
+        where += " AND status = ?"
+        params.append(status)
+    if register:
+        where += " AND register = ?"
+        params.append(register)
+    if auto_publish is not None:
+        where += " AND auto_publish = ?"
+        params.append(1 if auto_publish else 0)
+    with _connect() as conn:
+        rows = conn.execute(f"SELECT * FROM ideas {where}", params).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/ideas")
+def api_list_ideas(
+    status: Optional[str] = None,
+    register: Optional[str] = None,
+    auto_publish: Optional[bool] = None,
+    _: None = Depends(check_auth),
+) -> list[dict]:
+    return _get_ideas_api(status=status, register=register, auto_publish=auto_publish)
+
+
+@app.get("/api/ideas/{idea_id}")
+def api_get_idea(idea_id: int, _: None = Depends(check_auth)) -> dict:
+    return _get_idea(idea_id)  # 404s if missing
 
 
 @app.get("/settings")

@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS ideas (
   tags TEXT,
   inspiration_source TEXT,
   status TEXT NOT NULL DEFAULT 'idea'
-    CHECK (status IN ('idea', 'scripted', 'ready', 'posted', 'archived')),
+    CHECK (status IN ('idea', 'scripted', 'ready', 'posted', 'archived', 'failed')),
   score INTEGER CHECK (score BETWEEN 1 AND 5),
   layout_image_path TEXT,
   final_image_path TEXT,
@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS ideas (
   scheduled_at TEXT,
   caption TEXT,
   hashtags TEXT,
+  auto_publish INTEGER NOT NULL DEFAULT 0,
+  register TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
