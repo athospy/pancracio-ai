@@ -1,0 +1,159 @@
+{
+  "projectName": "Pancracio Auto-Publish Pipeline",
+  "slug": "pancracio-auto-publish",
+  "date": "2026-09-24",
+  "status": "Approved",
+  "gates": {
+    "dimensions": [
+      {
+        "key": "problem",
+        "label": "Problem Clarity",
+        "status": "ready",
+        "evidence": "Every image post today requires the user to manually draft a prompt, paste it into ChatGPT's web app, download the plate, run a local Remotion render command, and manually upload+schedule in Meta Business Suite — for every single post; this manual cost is what's kept posting at a batch-every-couple-months pace instead of the daily cadence the user wants."
+      },
+      {
+        "key": "goals",
+        "label": "Goal Definition",
+        "status": "ready",
+        "evidence": "Sustain ~1 published Instagram image post per day, from an image-content idea's title entered in the tracker to a live post, with zero manual steps for any such idea flagged auto_publish."
+      },
+      {
+        "key": "criteria",
+        "label": "Success Criteria",
+        "status": "ready",
+        "evidence": "Seven pass/fail criteria, each paired with a concrete runnable command (or a named judgment call) after a success-criteria critic pass rewrote four that were originally unrunnable prose or non-asserting."
+      },
+      {
+        "key": "scope",
+        "label": "Scope Boundaries",
+        "status": "ready",
+        "evidence": "In/out boundaries settled across four interview rounds plus a hidden-dependency critic pass that surfaced the IG token's missing publish scope, the unnamed originality-check tool, the deploy user's no-sudo constraint, and the existing character-reference-image mechanism to reuse — all now folded into scope."
+      },
+      {
+        "key": "consistency",
+        "label": "Consistency",
+        "status": "ready",
+        "evidence": "No contradictions remain — 'fully unattended' is preserved by replacing human quality checks with automated equivalents rather than dropping them, VPS-local n8n is compatible with all required external calls being outbound-only, and this contract's n8n plan is now explicitly reconciled with (supersedes) the metrics-automation-checklist's earlier, conflicting public-subdomain n8n sketch."
+      }
+    ]
+  },
+  "problem": [
+    "The Pancracio image-post pipeline is fully manual end-to-end: for every post, the user personally drafts a GPT-4o prompt, pastes it plus a character reference image into ChatGPT's web app, downloads the resulting plate, runs a local Remotion CLI command to composite the quote text, and manually uploads the final image with a caption into Meta Business Suite to schedule it.",
+    "This manual cost is the direct reason posting has happened in batches every couple of months rather than on an ongoing daily cadence — the user wants to post about once a day, but doing every step by hand at that frequency isn't sustainable.",
+    "The tracker app (built this session) already automates metrics collection after a post is live, but the creation half of the pipeline — idea to published post — remains entirely manual."
+  ],
+  "goals": [
+    "Sustain roughly 1 published Instagram image post per day sourced from image-content ideas entered in the tracker, with zero manual steps between idea creation and the post going live for any such idea flagged auto_publish. (This first end-to-end build proves the mechanism once; ongoing daily-cadence sustainment is then monitored operationally, not gated on a contract-level check.)",
+    "Preserve the two quality safeguards the manual process relied on — the originality/plagiarism check and the ~6:4 reframe:observational voice-register balance — as automated equivalents rather than dropping them when the human is removed from the loop."
+  ],
+  "successCriteria": [
+    {
+      "criterion": "An idea seeded with only a title and auto_publish=true, content_type=image, results in a real Instagram post published with no manual intervention",
+      "check": { "cmd": "curl -s -u $AUTH https://pancracio-ideas.santiagomorel.dev/api/ideas/$TEST_IDEA_ID | jq -e '.status == \"posted\" and (.ig_media_id != null)'", "expect": "exits 0; pair with a human glance at the live Instagram post via its permalink for visual/caption quality" }
+    },
+    {
+      "criterion": "The automated originality check (Claude API's native web-search tool) flags a deliberately plagiarized test line before an image is generated for it",
+      "check": { "cmd": "curl -sf -u $AUTH -X POST https://pancracio-ideas.santiagomorel.dev/internal/originality-check -d 'line=Start With Why' | jq -e '.flagged == true'", "expect": "exits 0" }
+    },
+    {
+      "criterion": "The voice-register rolling tracker correctly reflects real counts after several ideas are processed with known registers",
+      "check": { "cmd": "for r in reframe reframe observational; do curl -s -u $AUTH -X POST https://pancracio-ideas.santiagomorel.dev/ideas --data-urlencode \"title=test-$r-$RANDOM\" --data-urlencode \"content_type=image\" --data-urlencode \"register=$r\"; done; curl -s -u $AUTH 'https://pancracio-ideas.santiagomorel.dev/api/ideas?register=reframe' | jq -e 'length >= 2'", "expect": "exits 0" }
+    },
+    {
+      "criterion": "A forced step failure (e.g. an invalid OpenAI credential) marks the idea 'failed' in the tracker and does not retry",
+      "check": { "cmd": "curl -s -u $AUTH https://pancracio-ideas.santiagomorel.dev/api/ideas/$TEST_IDEA_ID | jq -e '.status == \"failed\"'; curl -s -H \"X-N8N-API-KEY: $N8N_API_KEY\" http://localhost:5678/api/v1/executions?workflowId=$WF_ID | jq -e '(.data | length) == 1'", "expect": "both exit 0 after one deliberately-broken run" }
+    },
+    {
+      "criterion": "Remotion renders a valid composited PNG on the dedicated render VPS at the correct dimensions, with no dependency on the user's local machine or on charmander",
+      "check": { "cmd": "ssh $RENDER_VPS_ALIAS \"cd ~/pancracio-render/remotion && ./node_modules/.bin/remotion still PancracioQuote /tmp/test-render.png --props=/tmp/test-props.json --overwrite && identify -format '%wx%h' /tmp/test-render.png\"", "expect": "command exits 0 and prints 1122x1402 ($RENDER_VPS_ALIAS is the SSH config alias set up in Phase 1 once the new VPS exists)" }
+    },
+    {
+      "criterion": "The character reference image (the existing settings-table `character_reference_image` upload, not a new hardcoded path) is present and actually included in the image-generation request",
+      "check": { "cmd": "curl -s -u $AUTH https://pancracio-ideas.santiagomorel.dev/settings | grep -q 'character_reference'; ssh charmander-pancracio \"grep -q reference_image /home/deploy/pancracio-ai/logs/image-gen-last-request.json\"", "expect": "both exit 0 — the second asserts the reference was in the actual request, not just present on disk" }
+    },
+    {
+      "criterion": "The n8n workflow is exported and committed to git so it's reproducible/auditable outside n8n's own DB if the VPS is rebuilt",
+      "check": { "cmd": "git -C /Users/santiagomorel/site/personal/pancracio-ai ls-files n8n/workflows/ | grep -q '\\.json$'", "expect": "exits 0" }
+    }
+  ],
+  "scope": {
+    "full": [],
+    "stretch": [],
+    "mvp": [
+      { "item": "auto_publish opt-in flag and register field (reframe/observational) on ideas (schema + tracker UI)", "reason": "Lets the user keep hand-curating some ideas while automating others, and gives the drafting step a place to record which voice register it used." },
+      { "item": "Generic JSON endpoints GET /api/ideas (filterable by status/register/auto_publish) and GET /api/ideas/{id}", "reason": "Small, reusable addition that makes the pipeline's own state machine (and this contract's success criteria) mechanically checkable, instead of scraping HTML." },
+      { "item": "n8n provisioned on the VPS via docker-compose, VPS-local only (no public subdomain); reconciles with and supersedes the earlier, conflicting public-subdomain n8n sketch in metrics-automation-checklist.md Phase E", "reason": "User explicitly asked for n8n by name; its execution-history UI gives visibility into which step failed across four external systems (OpenAI, Anthropic, Instagram, the tracker) in a pipeline nobody is watching live, and reuses a pattern already operated in the job-finder project (/Users/santiagomorel/site/personal/job-finder/n8n/)." },
+      { "item": "Prompt-drafting via the Anthropic API, encoding the existing plate-prompt template, prop-swap slot, and the text-on-props safety callouts, informed by the rolling register tracker", "reason": "Replaces the manual 'Claude drafts the prompt' step with the same template already proven to work." },
+      { "item": "Automated originality check using the Anthropic API's native web-search tool, run on every drafted quote line before image generation", "reason": "Directly replaces the human 'search every line' safeguard that already caught one real incident; reuses the same Anthropic credential already needed for prompt-drafting rather than adding a third API provider." },
+      { "item": "Background-plate image generation via OpenAI's Images API, reading the existing settings-table character_reference_image (uploaded via the tracker's own /settings page) rather than a new hardcoded path", "reason": "Replaces the manual ChatGPT-web-app paste step, and reuses the reference-image mechanism the app already ships instead of duplicating it." },
+      { "item": "Remotion quote-card compositing running on the VPS (new Chromium/Node renderer dependency there, installed via a one-time manual root session since the `deploy` user has no general sudo), triggered by n8n", "reason": "A pipeline that depends on the user's laptop being on for rendering isn't actually unattended; installing new system packages is outside deploy's documented scoped-sudo access." },
+      { "item": "Caption + hashtag drafting via an LLM call", "reason": "Completes the content needed to publish; the tracker already has fields for both." },
+      { "item": "Regenerate the Instagram access token with instagram_content_publish added (current token only has instagram_business_basic + instagram_business_manage_insights)", "reason": "Content-publishing requires a scope this project's existing token was deliberately generated without; blocking prerequisite for Phase 4." },
+      { "item": "Instagram publish via the Graph API content-publishing endpoints (container + publish), fired at the idea's scheduled_at (default 10am if unset)", "reason": "Preserves the existing daily-10am posting habit while removing the manual Meta Business Suite step." },
+      { "item": "Failure handling: mark the idea 'failed' and stop that idea's run, no automatic retry", "reason": "A silent retry loop against paid APIs on a real bug could burn money fast; a visible failed state lets the user look at it manually." },
+      { "item": "n8n workflow exported to n8n/workflows/ and git-tracked, documented in internal-docs", "reason": "Reproducible/auditable outside n8n's own DB if the VPS is ever rebuilt." }
+    ],
+    "outOfScope": [
+      { "item": "Video Reel automation (ElevenLabs voice/video pipeline)", "reason": "A different, much more manual and credit-limited (~2/month) pipeline with heavier creative judgment involved; out of scope for this project." },
+      { "item": "Any human approval gate before publish", "reason": "Explicitly declined by the user in favor of fully unattended operation, with the quality-control tradeoff knowingly accepted." },
+      { "item": "Public n8n subdomain / internet-reachable n8n UI or inbound webhook", "reason": "Not needed for a schedule-trigger-plus-outbound-calls workflow; smaller attack surface without it." },
+      { "item": "Automatic retry of failed pipeline steps", "reason": "Explicitly declined — retries against paid, potentially-misconfigured API calls risk unbounded cost." },
+      { "item": "Any change to the manual pipeline for ideas not flagged auto_publish", "reason": "Ideas the user still wants to hand-curate keep working exactly as documented today." },
+      { "item": "A mechanically-verified test of sustained ~1/day cadence over time", "reason": "Not practical to gate contract approval on; the one end-to-end test proves the mechanism, ongoing cadence is an operational concern monitored after launch." }
+    ],
+    "future": [
+      "Public n8n subdomain + a 'trigger now' webhook callable from the tracker UI",
+      "Auto-retry with backoff for genuinely transient errors (rate limits, network blips)",
+      "An optional human-approval toggle, revisited if the automated quality checks prove insufficient in practice",
+      "Extending automation to the video Reel pipeline"
+    ]
+  },
+  "decisions": [
+    { "decision": "Publish fully unattended, no human approval gate before content goes live", "rejected": "Require a one-click approval step after generation before publishing", "reason": "User explicitly wants zero-touch automation and knowingly accepts the quality-control tradeoff, given the past duplicate-content incident happened even with a human in the loop." },
+    { "decision": "Generate background-plate images via OpenAI's Images API", "rejected": "Keep pasting prompts into ChatGPT's web app by hand", "reason": "A manual paste step blocks full automation; user accepted the new API cost and the small risk of a slightly different look than the ChatGPT app produces." },
+    { "decision": "Ideas opt in to automation via an explicit auto_publish flag", "rejected": "Automate every new idea with no filter", "reason": "Keeps a manual-curation escape hatch for ideas the user wants to handle by hand." },
+    { "decision": "Run Remotion compositing on the VPS", "rejected": "Webhook back to the user's Mac to render locally", "reason": "A pipeline that only runs when the user's laptop happens to be on isn't actually unattended." },
+    { "decision": "Keep n8n VPS-local only, no public subdomain", "rejected": "Give n8n its own public subdomain with nginx+TLS+basic auth, matching the tracker (and matching the earlier, now-superseded sketch in metrics-automation-checklist.md Phase E)", "reason": "No inbound webhook is required for a schedule-trigger-plus-outbound-calls workflow; less setup and smaller attack surface. This contract's n8n plan supersedes that checklist's Phase E sketch rather than running a second, conflicting effort." },
+    { "decision": "On any pipeline-step failure, mark the idea 'failed' and stop — no retry", "rejected": "Auto-retry the failed step 2-3 times before flagging", "reason": "Avoids silently burning paid API calls retrying a non-transient bug." },
+    { "decision": "Run the originality check using the Anthropic API's native web-search tool", "rejected": "LLM self-check only, no automated check, or a separate search API (Serper/Bing/Google)", "reason": "Directly replaces the human safeguard that already caught one real incident; reusing the Anthropic credential already needed for prompt-drafting avoids adding a third external API provider just for this." },
+    { "decision": "Track rolling voice-register counts and explicitly instruct the drafting model toward the ~6:4 target", "rejected": "Weighted random register pick with no tracking", "reason": "Matches the documented register-balance intent precisely for a small added DB cost; a random pick can drift noticeably over a small batch." },
+    { "decision": "Target roughly 1 published post per day", "rejected": "Match the historical batch-every-couple-months pace", "reason": "Automation's whole value is removing the friction that made batching necessary in the first place." },
+    { "decision": "Publish at the idea's scheduled_at, defaulting to 10am when unset", "rejected": "Publish immediately as soon as each idea's pipeline finishes", "reason": "Preserves the existing daily-10am posting convention rather than posting at arbitrary times." },
+    { "decision": "Use n8n (docker-compose, VPS-local) rather than a cron script on the existing systemd pattern already proven for the tracker", "rejected": "A cron-triggered Python script calling the tracker API directly, reusing the tracker's own systemd deployment convention", "reason": "User explicitly asked for n8n by name; its execution-history UI gives real debugging value across a 4-external-system pipeline (OpenAI, Anthropic, Instagram, tracker) that runs unattended, and reuses a pattern already operated in the job-finder project." },
+    { "decision": "Reuse the tracker's existing settings-table character_reference_image upload for the OpenAI reference image, instead of a new hardcoded server path", "rejected": "Copy the reference image to a new fixed path like /home/deploy/pancracio-ai/character-ref/", "reason": "The app already ships this mechanism with its own upload UI at /settings; introducing a parallel path would duplicate it for no reason." },
+    { "decision": "Run n8n and the Remotion rendering step together on a new, separate VPS, leaving charmander untouched", "rejected": "Run n8n (and/or Remotion rendering) on charmander alongside the tracker app", "reason": "charmander is a 1-core/~2GB box already running the tracker, Ardu's backend, Ollama, and PostgreSQL; the actual resource risk is headless-Chromium rendering, not n8n itself. Colocating the render step with n8n avoids an extra network hop and keeps charmander doing only what it already does. The final composited image is uploaded back to the tracker's existing image-upload endpoint, so this needs no new tracker-side storage." }
+  ],
+  "execution": {
+    "strategy": "Sequential",
+    "phases": [
+      {
+        "title": "VPS infrastructure & credentials",
+        "risk": "medium",
+        "blocking": true,
+        "specPath": "docs/ideation/pancracio-auto-publish/spec-phase-1.md",
+        "notes": "Schema migration on charmander (auto_publish flag, register field, 'failed' status, GET /api/ideas + /api/ideas/{id}) — charmander gets no other new load. A separate, new VPS (provisioned by the user) hosts n8n via docker-compose and, colocated, the Remotion rendering environment for phase 3 — a one-time root session on that new box installs Docker, n8n, Node/Remotion deps, and Chromium's system dependencies; n8n's REST API is enabled there for execution-log checks. Obtain and store an OpenAI API key; confirm the Anthropic API key covers the native web-search tool used for the originality check in phase 2; regenerate the Instagram access token with instagram_content_publish added (blocking prereq for phase 4); confirm a character_reference_image is uploaded via the tracker's existing /settings page; update metrics-automation-checklist.md to point Phase E at this project instead of its earlier, now-superseded public-subdomain n8n sketch."
+      },
+      {
+        "title": "Prompt drafting & image generation",
+        "risk": "high",
+        "blocking": true,
+        "specPath": "docs/ideation/pancracio-auto-publish/spec-phase-2.md",
+        "notes": "Anthropic API call encoding the existing plate-prompt template, prop-swap slot, and text-on-props safety rules, informed by the rolling register-balance tracker; a standalone, independently-testable originality-check step using the Anthropic web-search tool (exposed via an internal /internal/originality-check endpoint for verification); OpenAI Images API call attaching the reference image read from the settings table; n8n nodes wiring these together and writing layout_image_path + register back via the tracker API."
+      },
+      {
+        "title": "Compositing & caption",
+        "risk": "medium",
+        "blocking": true,
+        "specPath": "docs/ideation/pancracio-auto-publish/spec-phase-3.md",
+        "notes": "Install Remotion's renderer (Chromium/Node, via the phase-1 root session) on the new VPS, colocated with n8n; a small dedicated rendering service there wraps `remotion still PancracioQuote --props=...` and returns the composited PNG; n8n uploads the result back to the tracker via its existing `/ideas/{id}/images` multipart endpoint (no new tracker code needed for storage); an LLM call (on the tracker, via Anthropic) drafts caption + hashtags, written back via the tracker API."
+      },
+      {
+        "title": "Publishing, scheduling & failure handling",
+        "risk": "high",
+        "blocking": true,
+        "specPath": "docs/ideation/pancracio-auto-publish/spec-phase-4.md",
+        "notes": "Instagram Graph API content-publish (container + publish) call using the re-consented publish-scoped token from phase 1; scheduled_at-driven daily trigger (default 10am when unset); failure handling that marks an idea 'failed' via the phase-1 JSON endpoint and stops without retry; an end-to-end test against one real seeded idea; export the workflow JSON to n8n/workflows/ and document the system in internal-docs."
+      }
+    ]
+  }
+}
