@@ -70,6 +70,12 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 # Cheaper model while iterating on Phase 2 — revisit before real production traffic if
 # drafting/originality quality needs it (see auto-publish-checklist.md).
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+# The visual quality check needs real vision reasoning, not just text drafting — tested head to
+# head against the cheap tier above on two known real images (one confirmed-flawed, one
+# confirmed-good): Haiku got BOTH wrong (missed the real defect, flagged the good image),
+# Sonnet got both right. Not worth the cost tradeoff for a safety gate specifically. See
+# auto-publish-checklist.md's Post-Phase-4 section for the actual test results.
+VISUAL_QA_MODEL = "claude-sonnet-5"
 OPENAI_IMAGES_EDIT_URL = "https://api.openai.com/v1/images/edits"
 # gpt-image-1-mini (tried first for cost) doesn't support input_fidelity, and character
 # consistency against the reference image is the whole point of this call — went back to full
@@ -114,7 +120,9 @@ Composition — this is critical:
   not reach the top of the frame. Calm, unhurried, contemplative.
 - [PROP SWAP — the objects that express this post's quote. Keep them right of centre.]
 - Lower right foreground: a small bonsai in a shallow pot.
-- Lower right: an incense stick burning on stacked smooth stones, thin wisp of smoke.
+- Lower right: an incense stick burning on stacked smooth stones. The thin wisp of smoke must
+  rise directly from the tip of this incense stick and nowhere else — no smoke, mist, or steam
+  anywhere else in the frame (not from any other prop, even a hot drink).
 - Soft natural window light entering from the right.
 
 Style: 3D rendered plush toy, photorealistic fur texture, warm soft lighting, shallow
@@ -390,13 +398,21 @@ def _get_recent_register_counts(window: int = 10) -> dict[str, int]:
 
 
 def _anthropic_messages(
-    system: str, user: str, tools: Optional[list] = None, max_tokens: int = 1500
+    system: str,
+    user: "str | list",
+    tools: Optional[list] = None,
+    max_tokens: int = 1500,
+    model: Optional[str] = None,
 ) -> dict:
+    """`user` may be a plain string, or a list of Anthropic content blocks (e.g. image + text)
+    for vision calls — passed straight through as `content` since the Messages API accepts
+    either shape. `model` overrides the default ANTHROPIC_MODEL for calls that need stronger
+    reasoning than the cheap tier reliably gives (see VISUAL_QA_MODEL)."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured on the server")
     body: dict = {
-        "model": ANTHROPIC_MODEL,
+        "model": model or ANTHROPIC_MODEL,
         "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": user}],
@@ -566,6 +582,66 @@ def _check_originality(line: str) -> dict:
         return {"flagged": True, "reason": f"could not parse originality response: {text[:300]}"}
 
     logger.info("originality-check line=%r flagged=%s reason=%s", line, flagged, reason)
+    return {"flagged": flagged, "reason": reason}
+
+
+VISUAL_QA_SYSTEM = (
+    "You are a visual QA checker for a finished Instagram post image (a composited quote card). "
+    "Check for exactly two specific defect categories only, both found in real past generations:\n"
+    "1. The quote text visually overlapping, touching, or crowding the character or any prop —\n"
+    "   not just nearby, genuinely touching or crowding with little to no margin.\n"
+    "2. A disconnected or illogical visual element — most commonly smoke/steam/mist rising from\n"
+    "   empty space or the wrong object instead of its stated source (e.g. incense smoke that\n"
+    "   doesn't connect to the incense stick), but also any other prop that looks physically\n"
+    "   wrong or disconnected from what it's resting on/attached to.\n\n"
+    "Do NOT flag general aesthetic opinions, composition taste, minor prop placement you'd do\n"
+    "differently, or anything outside these two specific categories — those are accepted\n"
+    "limitations of the pipeline, not defects this check exists to catch."
+)
+
+
+def _check_visual_quality(image_url: str) -> dict:
+    """Returns {"flagged": bool, "reason": str | None}. Fails closed on API error — same
+    contract as _check_originality. Vision-based gate added after two real defects (text
+    overlapping the character, incense smoke disconnected from its source) shipped past manual
+    review on the first real end-to-end test; see auto-publish-checklist.md's Post-Phase-4
+    section. Deliberately narrow scope (two named categories) rather than open-ended "does this
+    look good" — general aesthetic judgment from a vision model risks false positives that would
+    fail real, fine posts closed for no good reason."""
+    user = [
+        {"type": "image", "source": {"type": "url", "url": image_url}},
+        {
+            "type": "text",
+            "text": (
+                "Check this image for the two defect categories in your instructions. Return "
+                "ONLY a JSON object, no markdown fencing, no other text:\n"
+                '{"flagged": true|false, "reason": "..." or null}'
+            ),
+        },
+    ]
+    try:
+        result = _anthropic_messages(
+            system=VISUAL_QA_SYSTEM, user=user, max_tokens=1024, model=VISUAL_QA_MODEL
+        )
+        text = "".join(
+            b["text"] for b in result.get("content", []) if b.get("type") == "text"
+        ).strip()
+        parsed = _extract_json_object(text)
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("flagged"), bool):
+            raise ValueError("missing/invalid 'flagged' key")
+        flagged = parsed["flagged"]
+        reason = parsed.get("reason")
+    except HTTPException as e:
+        logger.warning("visual-quality-check API call failed, failing closed: %s", e.detail)
+        return {"flagged": True, "reason": f"visual quality check API call failed: {e.detail}"}
+    except httpx.HTTPError as e:
+        logger.warning("visual-quality-check network error, failing closed: %s", e)
+        return {"flagged": True, "reason": f"visual quality check network error: {e}"}
+    except (ValueError, json.JSONDecodeError):
+        logger.warning("visual-quality-check response unparseable, failing closed: %r", text[:300])
+        return {"flagged": True, "reason": f"could not parse visual quality response: {text[:300]}"}
+
+    logger.info("visual-quality-check image_url=%r flagged=%s reason=%s", image_url, flagged, reason)
     return {"flagged": flagged, "reason": reason}
 
 
@@ -1264,6 +1340,15 @@ def internal_originality_check(line: str = Form(...), _: None = Depends(check_au
     return _check_originality(line)
 
 
+@app.post("/internal/visual-quality-check")
+def internal_visual_quality_check(idea_id: int = Form(...), _: None = Depends(check_auth)) -> dict:
+    idea = _get_idea(idea_id)  # 404s if missing
+    if not idea.get("final_image_path"):
+        raise HTTPException(status_code=400, detail="Idea has no final_image_path yet")
+    image_url = f"{TRACKER_PUBLIC_BASE}{idea['final_image_path']}"
+    return _check_visual_quality(image_url)
+
+
 @app.post("/internal/generate-plate")
 def internal_generate_plate(
     idea_id: int = Form(...), prompt: str = Form(...), _: None = Depends(check_auth)
@@ -1286,12 +1371,12 @@ def internal_draft_caption(idea_id: int = Form(...), _: None = Depends(check_aut
 
 
 def _run_auto_publish_pipeline(idea_id: int) -> dict:
-    """Draft -> originality check -> generate plate -> render -> draft caption -> publish, as
-    one unit: any exception marks the idea 'failed' and stops, no retry, no partial-success
-    ambiguity. Called in-process from Phase 2/3's plain functions (not their HTTP endpoints),
-    so their own persistence (layout/final image paths) still happens as each step completes —
-    deliberately, so a failure partway through still leaves visible partial progress on the
-    idea row for debugging, same as a human would want to see."""
+    """Draft -> originality check -> generate plate -> render -> visual quality check -> draft
+    caption -> publish, as one unit: any exception marks the idea 'failed' and stops, no retry,
+    no partial-success ambiguity. Called in-process from Phase 2/3's plain functions (not their
+    HTTP endpoints), so their own persistence (layout/final image paths) still happens as each
+    step completes — deliberately, so a failure partway through still leaves visible partial
+    progress on the idea row for debugging, same as a human would want to see."""
     idea = _get_idea(idea_id)
     try:
         counts = _get_recent_register_counts()
@@ -1321,6 +1406,10 @@ def _run_auto_publish_pipeline(idea_id: int) -> dict:
 
         final_path = _render_post_image(idea)
         idea = {**idea, "final_image_path": final_path}
+
+        visual_check = _check_visual_quality(f"{TRACKER_PUBLIC_BASE}{final_path}")
+        if visual_check["flagged"]:
+            raise RuntimeError(f"visual quality check flagged: {visual_check['reason']}")
 
         caption = _draft_caption(idea)
         with _connect() as conn:

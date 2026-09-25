@@ -37,6 +37,7 @@ TEXT_TOP = 132
 BASE_MAX_LINE_CHARS = 28
 MIN_QUOTE_FONT_SIZE = 36
 MIN_TEXT_WIDTH = 260
+WRAP_SAFETY_FACTOR = 0.85  # see _fit_text_layout — char-count wrapping runs wider than intended
 RENDER_TIMEOUT = 120
 
 # Vertical band actually SCANNED for obstructions — deliberately not the full frame height.
@@ -113,7 +114,12 @@ def _find_safe_text_width(image_path: Path) -> int:
             break
         safe_right = x
 
-    safe_width = safe_right - TEXT_LEFT - 20  # small buffer before whatever isn't flat
+    # Buffer before whatever isn't flat — found too tight at 20px in practice (text still read
+    # as crowding the character on a real render, even though pixels technically didn't
+    # overlap). Widened after that finding; the wrap-width safety factor in _fit_text_layout
+    # below covers the other half of the same problem (line length is estimated by character
+    # count, not actual rendered pixel width, so it can run wider than intended too).
+    safe_width = safe_right - TEXT_LEFT - 55
     return max(MIN_TEXT_WIDTH, min(BASE_TEXT_WIDTH, safe_width))
 
 
@@ -134,7 +140,13 @@ def _fit_text_layout(quote_line: str, safe_width: int) -> tuple[int, int, list[s
     while True:
         # Characters-per-line scales with width available and inversely with font size —
         # both change together as font_size is reduced below, so recompute each pass.
-        max_chars = max(10, round(BASE_MAX_LINE_CHARS * (safe_width / BASE_TEXT_WIDTH) * (BASE_QUOTE_FONT_SIZE / font_size)))
+        # WRAP_SAFETY_FACTOR shrinks the width used here specifically (not safe_width itself,
+        # which is still returned as-is for the text box) because char-count wrapping only
+        # approximates actual rendered pixel width — found running noticeably wider than
+        # intended on a real render (Playfair Display's bold weight averages wider per
+        # character than the plain count-based estimate assumes), so lines wrap a bit shorter
+        # than the raw detected space to leave real margin instead of a technical non-overlap.
+        max_chars = max(10, round(BASE_MAX_LINE_CHARS * (safe_width * WRAP_SAFETY_FACTOR / BASE_TEXT_WIDTH) * (BASE_QUOTE_FONT_SIZE / font_size)))
         lines = _wrap_quote_line(quote_line, max_chars)
         needed_height = len(lines) * font_size * 1.12
         if needed_height <= available_height or font_size <= MIN_QUOTE_FONT_SIZE:
