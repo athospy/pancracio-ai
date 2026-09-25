@@ -320,6 +320,17 @@ git -C /Users/santiagomorel/site/personal/pancracio-ai ls-files n8n/workflows/ |
       (Failure Modes, first row) is acceptable, or whether a cheaper "resume from last successful
       step" mode is worth the added complexity — revisit if failures turn out to be common
       enough for the regeneration cost to matter.
+- [x] **Resolved 2026-09-25**: this section's `due=true` pseudocode (`scheduled_at <=
+      datetime('now')`) is a real bug, not just illustrative — verified against the live
+      production DB that a raw string comparison between `scheduled_at`'s 'T'-separated storage
+      format and SQLite's space-separated `datetime('now')` silently evaluates "not yet due" for
+      any same-day time, regardless of whether it's actually passed. Implemented as
+      `datetime(scheduled_at) <= datetime('now')` instead (both sides normalized) — confirmed
+      correct against 5 seeded edge cases.
+- [x] **Resolved 2026-09-25**: `_default_scheduled_at()` uses `isoformat(timespec="minutes")`
+      rather than the pseudocode's full `isoformat()` (which includes seconds) — deliberate, so
+      the value round-trips cleanly through the edit form's `<input type="datetime-local">`
+      (that input type doesn't carry seconds).
 
 ---
 

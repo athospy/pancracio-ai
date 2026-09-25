@@ -17,6 +17,7 @@ import sqlite3
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -354,6 +355,17 @@ def _set_setting(key: str, value: str) -> None:
             """,
             (key, value),
         )
+
+
+def _default_scheduled_at() -> str:
+    """Next 10am — the server runs in UTC (confirmed), matching the manual process's own loose
+    'around 10am' habit. Returned in datetime-local input format (no seconds) so it round-trips
+    cleanly through the edit form's <input type="datetime-local">."""
+    now = datetime.now()
+    ten_am = now.replace(hour=10, minute=0, second=0, microsecond=0)
+    if now >= ten_am:
+        ten_am += timedelta(days=1)
+    return ten_am.isoformat(timespec="minutes")
 
 
 def _get_recent_register_counts(window: int = 10) -> dict[str, int]:
@@ -859,21 +871,25 @@ def update_idea(
     scheduled_at: str = Form(""),
     caption: str = Form(""),
     hashtags: str = Form(""),
+    auto_publish: bool = Form(False),
     _: None = Depends(check_auth),
 ):
     score_value = int(score) if score else None
+    if auto_publish and not scheduled_at:
+        scheduled_at = _default_scheduled_at()
     with _connect() as conn:
         cur = conn.execute(
             """
             UPDATE ideas
             SET title = ?, content_type = ?, description = ?, category = ?, tags = ?,
                 inspiration_source = ?, status = ?, score = ?, image_prompt = ?,
-                scheduled_at = ?, caption = ?, hashtags = ?, updated_at = datetime('now')
+                scheduled_at = ?, caption = ?, hashtags = ?, auto_publish = ?,
+                updated_at = datetime('now')
             WHERE id = ?
             """,
             (title, content_type, description, category, tags, inspiration_source,
              status, score_value, image_prompt, scheduled_at or None, caption, hashtags,
-             idea_id),
+             1 if auto_publish else 0, idea_id),
         )
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Idea not found")
@@ -1030,6 +1046,68 @@ def _fetch_ig_insights(media_id: str) -> dict[str, int]:
     return {item["name"]: item["values"][0]["value"] for item in data.get("data", [])}
 
 
+def _ig_get(path: str, params: dict) -> dict:
+    url = f"{IG_GRAPH_BASE}{path}?{urllib.parse.urlencode(params)}"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Instagram API error: {e.read().decode()}")
+    except urllib.error.URLError as e:
+        raise HTTPException(status_code=502, detail=f"Instagram API unreachable: {e}")
+
+
+def _ig_post(path: str, params: dict) -> dict:
+    data = urllib.parse.urlencode(params).encode()
+    req = urllib.request.Request(f"{IG_GRAPH_BASE}{path}", data=data, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Instagram API error: {e.read().decode()}")
+    except urllib.error.URLError as e:
+        raise HTTPException(status_code=502, detail=f"Instagram API unreachable: {e}")
+
+
+def _publish_to_instagram(idea: dict) -> dict:
+    """Returns {"ig_media_id": str, "permalink": str}. Two-step Graph API call: create a media
+    container, then publish it. On success, inserts a posts row and marks the idea 'posted' —
+    same table/status the manual mark_posted() flow uses, so metrics refresh
+    (POST /posts/{id}/refresh) works identically for auto- and manually-published posts."""
+    token = os.environ.get("IG_ACCESS_TOKEN")
+    if not token:
+        raise HTTPException(status_code=500, detail="IG_ACCESS_TOKEN not configured on the server")
+    image_url = f"{TRACKER_PUBLIC_BASE}{idea['final_image_path']}"
+    caption = f"{idea['caption']}\n\n{idea['hashtags']}"
+    container = _ig_post(
+        "/me/media", {"image_url": image_url, "caption": caption, "access_token": token}
+    )
+    creation_id = container["id"]
+    publish = _ig_post(
+        "/me/media_publish", {"creation_id": creation_id, "access_token": token}
+    )
+    media_id = publish["id"]
+    # Logged before the permalink fetch specifically: if that next call fails, the post is
+    # already live on Instagram but untracked here (accepted edge case per spec-phase-4.md's
+    # Error Handling table) — this is the one handle a human would need to reconcile it by hand.
+    logger.info("instagram media published, media_id=%s, fetching permalink next", media_id)
+    permalink = _ig_get(f"/{media_id}", {"fields": "permalink", "access_token": token})["permalink"]
+
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO posts (idea_id, platform, post_url, posted_at, ig_media_id)
+            VALUES (?, 'instagram', ?, datetime('now'), ?)
+            """,
+            (idea["id"], permalink, media_id),
+        )
+        conn.execute(
+            "UPDATE ideas SET status = 'posted', updated_at = datetime('now') WHERE id = ?",
+            (idea["id"],),
+        )
+    return {"ig_media_id": media_id, "permalink": permalink}
+
+
 @app.post("/posts/{post_id}/refresh")
 def refresh_post_metrics(post_id: int, _: None = Depends(check_auth)):
     """Manual on-demand refresh — pulls current numbers straight from Instagram
@@ -1105,6 +1183,7 @@ def _get_ideas_api(
     status: Optional[str] = None,
     register: Optional[str] = None,
     auto_publish: Optional[bool] = None,
+    due: Optional[bool] = None,
 ) -> list[dict]:
     where = "WHERE 1=1"
     params: list = []
@@ -1117,6 +1196,16 @@ def _get_ideas_api(
     if auto_publish is not None:
         where += " AND auto_publish = ?"
         params.append(1 if auto_publish else 0)
+    if due:
+        # datetime(...) on both sides, not a raw string compare: scheduled_at is stored
+        # 'T'-separated (HTML datetime-local / _default_scheduled_at()'s isoformat()) while
+        # SQLite's datetime('now') is space-separated — a raw `scheduled_at <= datetime('now')`
+        # silently compares 'T' vs ' ' lexicographically and is wrong for same-day times
+        # (verified against production: a clearly-past 10:00 came back as not-yet-due).
+        where += (
+            " AND auto_publish = 1 AND status = 'idea'"
+            " AND (scheduled_at IS NULL OR datetime(scheduled_at) <= datetime('now'))"
+        )
     with _connect() as conn:
         rows = conn.execute(f"SELECT * FROM ideas {where}", params).fetchall()
     return [dict(r) for r in rows]
@@ -1127,9 +1216,10 @@ def api_list_ideas(
     status: Optional[str] = None,
     register: Optional[str] = None,
     auto_publish: Optional[bool] = None,
+    due: Optional[bool] = None,
     _: None = Depends(check_auth),
 ) -> list[dict]:
-    return _get_ideas_api(status=status, register=register, auto_publish=auto_publish)
+    return _get_ideas_api(status=status, register=register, auto_publish=auto_publish, due=due)
 
 
 @app.get("/api/ideas/{idea_id}")
@@ -1187,6 +1277,67 @@ def internal_draft_caption(idea_id: int = Form(...), _: None = Depends(check_aut
             (drafted["caption"], drafted["hashtags"], idea_id),
         )
     return drafted
+
+
+def _run_auto_publish_pipeline(idea_id: int) -> dict:
+    """Draft -> originality check -> generate plate -> render -> draft caption -> publish, as
+    one unit: any exception marks the idea 'failed' and stops, no retry, no partial-success
+    ambiguity. Called in-process from Phase 2/3's plain functions (not their HTTP endpoints),
+    so their own persistence (layout/final image paths) still happens as each step completes —
+    deliberately, so a failure partway through still leaves visible partial progress on the
+    idea row for debugging, same as a human would want to see."""
+    idea = _get_idea(idea_id)
+    try:
+        counts = _get_recent_register_counts()
+        draft = _draft_plate_prompt(idea, counts)
+        with _connect() as conn:
+            conn.execute(
+                """
+                UPDATE ideas SET register = ?, quote_line = ?, image_prompt = ?,
+                    updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (draft["register"], draft["quote_line"], draft["prompt"], idea_id),
+            )
+        idea = {
+            **idea,
+            "register": draft["register"],
+            "quote_line": draft["quote_line"],
+            "image_prompt": draft["prompt"],
+        }
+
+        check = _check_originality(draft["quote_line"])
+        if check["flagged"]:
+            raise RuntimeError(f"originality check flagged: {check['reason']}")
+
+        layout_path = _generate_plate_image(idea_id, draft["prompt"])
+        idea = {**idea, "layout_image_path": layout_path}
+
+        final_path = _render_post_image(idea)
+        idea = {**idea, "final_image_path": final_path}
+
+        caption = _draft_caption(idea)
+        with _connect() as conn:
+            conn.execute(
+                "UPDATE ideas SET caption = ?, hashtags = ?, updated_at = datetime('now') WHERE id = ?",
+                (caption["caption"], caption["hashtags"], idea_id),
+            )
+        idea = {**idea, **caption}
+
+        result = _publish_to_instagram(idea)
+        return {"status": "posted", **result}
+    except Exception as e:
+        with _connect() as conn:
+            conn.execute(
+                "UPDATE ideas SET status = 'failed', updated_at = datetime('now') WHERE id = ?",
+                (idea_id,),
+            )
+        raise HTTPException(status_code=500, detail=f"pipeline failed: {e}") from e
+
+
+@app.post("/internal/run-pipeline/{idea_id}")
+def run_pipeline(idea_id: int, _: None = Depends(check_auth)) -> dict:
+    return _run_auto_publish_pipeline(idea_id)
 
 
 @app.get("/settings")

@@ -45,6 +45,16 @@
       <input type="datetime-local" id="scheduled_at" name="scheduled_at" value="{{ idea.scheduled_at or '' }}">
     </div>
     <div>
+      <label class="field-label" for="auto_publish">
+        <input type="checkbox" id="auto_publish" name="auto_publish" value="true" {% if idea.auto_publish %}checked{% endif %}>
+        Auto-publish (prompt drafting, image generation, compositing, caption, and Instagram
+        publish run automatically — no manual steps once this is checked)
+      </label>
+    </div>
+    {% if idea.register %}
+    <p class="muted">Register: {{ idea.register }}{% if idea.quote_line %} — "{{ idea.quote_line }}"{% endif %}</p>
+    {% endif %}
+    <div>
       <label class="field-label" for="image_prompt">GPT-4o layout prompt</label>
       <textarea id="image_prompt" name="image_prompt" placeholder="Prompt to paste into ChatGPT to generate the layout image" rows="4">{{ idea.image_prompt or '' }}</textarea>
       {% if character_reference_image %}

@@ -1,0 +1,140 @@
+{
+  "name": "Pancracio Auto-Publish",
+  "nodes": [
+    {
+      "id": "f1a1b1c1-0001-4a1a-8a1a-000000000001",
+      "name": "Hourly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "f1a1b1c1-0002-4a1a-8a1a-000000000002",
+      "name": "Get Due Ideas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://pancracio-ideas.santiagomorel.dev/api/ideas",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "due",
+              "value": "true"
+            }
+          ]
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBasicAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "HGAAA7C2wrsj5ySp",
+          "name": "Pancracio Tracker Basic Auth"
+        }
+      }
+    },
+    {
+      "id": "f1a1b1c1-0004-4a1a-8a1a-000000000004",
+      "name": "Split Into Ideas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// GET /api/ideas?due=true returns a JSON array in the response body. Explicitly\n// split it into one n8n item per idea, rather than relying on the HTTP Request\n// node's version-dependent auto-splitting of array responses.\nconst body = $input.first().json;\nconst ideas = Array.isArray(body) ? body : [];\nreturn ideas.map((idea) => ({ json: idea }));"
+      }
+    },
+    {
+      "id": "f1a1b1c1-0003-4a1a-8a1a-000000000003",
+      "name": "Run Pipeline For Idea",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": false,
+      "onError": "continueRegularOutput",
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://pancracio-ideas.santiagomorel.dev/internal/run-pipeline/{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBasicAuth",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "HGAAA7C2wrsj5ySp",
+          "name": "Pancracio Tracker Basic Auth"
+        }
+      }
+    }
+  ],
+  "pinData": null,
+  "connections": {
+    "Hourly": {
+      "main": [
+        [
+          {
+            "node": "Get Due Ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Due Ideas": {
+      "main": [
+        [
+          {
+            "node": "Split Into Ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Ideas": {
+      "main": [
+        [
+          {
+            "node": "Run Pipeline For Idea",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "5a4ae802-815e-4850-8220-40f2dd896feb",
+  "id": "syNlnICIa6tvLB99",
+  "tags": []
+}

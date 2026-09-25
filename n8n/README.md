@@ -42,8 +42,30 @@ loopback interface (see `docker-compose.yml`'s port binding).
   matching `job-finder/n8n/`'s own convention.
 - `N8N_SECURE_COOKIE=false` is set because this is only ever accessed over `http://localhost`
   via the SSH tunnel, never HTTPS.
-- No credentials are stored as n8n Credentials for this project — the pipeline logic (and every
-  API key it needs) lives in the tracker app's own environment on charmander, and the Remotion
-  render service on this same VPS. n8n's only job is scheduling + calling
-  `/internal/run-pipeline/{idea_id}` once per due idea; see
-  `docs/ideation/pancracio-auto-publish/spec-phase-4.md`.
+- Third-party API keys (Anthropic, OpenAI, Instagram) are never stored as n8n Credentials — they
+  live in the tracker app's own environment on charmander and the render service's environment
+  on this VPS. n8n's only job is scheduling + calling `/internal/run-pipeline/{idea_id}` once per
+  due idea; see `docs/ideation/pancracio-auto-publish/spec-phase-4.md`.
+- One n8n Credential *is* used (Phase 4): an `httpBasicAuth`-type credential holding the
+  tracker's own Basic Auth user/pass, so the workflow's HTTP Request nodes can call the
+  `check_auth`-gated tracker endpoints. Created via the n8n API, referenced by id/name only —
+  the actual secret never appears in the exported `n8n/workflows/*.json`.
+
+## Workflows
+
+`n8n/workflows/auto-publish.json` — Hourly schedule trigger → `GET /api/ideas?due=true` → split
+the JSON array response into one item per idea (explicit Code node, not relying on the HTTP
+Request node's version-dependent array auto-splitting) → `POST
+/internal/run-pipeline/{{ $json.id }}` per idea, with `onError: continueRegularOutput` so one
+idea's pipeline failure doesn't block the rest of the batch, and `retryOnFail: false` per the
+contract's explicit no-retry decision.
+
+Built via the n8n REST API (not the UI) for reliability/reviewability — see
+`internal-docs/ideas-tracker/lessons-learned.md` for the exact technique (including how to read
+a freshly-created API key's full value from the network response body when the UI's own
+copy-to-clipboard flow isn't available, e.g. in an automated browser).
+
+**Left inactive on purpose** after Phase 4's implementation — activating arms the schedule
+trigger for real, and the first time it finds a real due idea it publishes to Instagram. Needs
+explicit go-ahead before flipping the active toggle; see
+`internal-docs/ideas-tracker/auto-publish-pipeline.md`.
