@@ -6,7 +6,10 @@ Run from web/:
 Then open http://localhost:8000
 """
 
+import base64
+import io
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -17,12 +20,17 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from PIL import Image
 from pydantic import BaseModel
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("pancracio")
 
 BASE_DIR = Path(__file__).parent
 DB_PATH = BASE_DIR / "pancracio.db"
@@ -47,6 +55,96 @@ SORT_OPTIONS = {
     "title": "title COLLATE NOCASE ASC",
 }
 IG_GRAPH_BASE = "https://graph.instagram.com/v21.0"
+
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
+# Cheaper model while iterating on Phase 2 — revisit before real production traffic if
+# drafting/originality quality needs it (see auto-publish-checklist.md).
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+OPENAI_IMAGES_EDIT_URL = "https://api.openai.com/v1/images/edits"
+# gpt-image-1-mini (tried first for cost) doesn't support input_fidelity, and character
+# consistency against the reference image is the whole point of this call — went back to full
+# gpt-image-1 + input_fidelity="high" after a real test showed mini drifting noticeably off-model
+# (face shape, fur rendering, scarf drape). gpt-image-1 itself retires 2026-10-23 — revisit then.
+OPENAI_IMAGE_MODEL = "gpt-image-1"
+OPENAI_IMAGE_QUALITY = "medium"
+OPENAI_IMAGE_INPUT_FIDELITY = "high"  # preserves reference-image face/detail; gpt-image-1 only
+OPENAI_IMAGE_GEN_SIZE = "1024x1536"  # closest supported portrait size to our 4:5 target
+PLATE_TARGET_SIZE = (1122, 1402)  # exact 4:5 frame Remotion's PancracioQuote composition expects
+
+# Verbatim source: internal-docs/pipeline/auto-publish-prompt-template.md (not deployed to the
+# VPS — internal-docs/ is gitignored — so the real text has to live here; keep both in sync).
+PLATE_PROMPT_SYSTEM = """\
+You are drafting an image-generation prompt for Pancracio, a capybara plush toy Instagram
+character. Your job is to fill in two blanks in a FIXED template — the prop swap and the quote
+line — not to redesign the template itself.
+
+## Fixed boilerplate (use word-for-word, only the two bracketed sections change)
+
+Using the attached image as character reference, create a 4:5 portrait image (1122x1402)
+of a capybara plush toy character named Pancracio.
+
+ABSOLUTELY NO TEXT. No letters, no words, no writing, no signage, no calligraphy scroll,
+no book spines with titles, no labels anywhere in the image. This is a background plate
+that text will be added to later.
+
+Composition — this is critical:
+- The LEFT 45% of the frame must be clean, empty, warm sandy-beige wall. Flat and
+  uncluttered. No props, no plants, no hard shadows crossing it, no objects intruding.
+  Just softly lit wall with gentle natural gradient.
+- Pancracio sits on the RIGHT side of the frame, on a round woven rattan rug. Calm,
+  unhurried, contemplative.
+- [PROP SWAP — the objects that express this post's quote. Keep them right of centre.]
+- Lower right foreground: a small bonsai in a shallow pot.
+- Lower right: an incense stick burning on stacked smooth stones, thin wisp of smoke.
+- Soft natural window light entering from the right.
+
+Style: 3D rendered plush toy, photorealistic fur texture, warm soft lighting, shallow
+depth of field. Paraguayan flag scarf — red stripe on top, white in the middle, blue on
+the bottom. Warm sandy/beige palette throughout.
+
+4:5 portrait. The empty left wall area is intentional negative space — do not fill it.
+
+## Filling in [PROP SWAP]
+
+Replace the bracketed line with 1-3 concrete objects/props (right of center, not touching the
+empty left wall) that visually express the idea's quote — e.g. "a phone face-down on the rug,
+screen dark" or "a shopping bag tipped on its side, a receipt spilling out." Pancracio always
+stays seated on the rug in this exact pose — never standing, walking, outdoors, or with other
+characters.
+
+**Text-bearing props need their own explicit callout, not just the generic "no text" line above.**
+If the prop swap includes any of the following, append a dedicated blank-out line for each:
+- Phone -> "The phone screen must be COMPLETELY BLANK -- a plain dark/glowing rectangle, no icons,
+  no app grid, no UI, no notification badges."
+- Sticky note / paper -> "The sticky note must be COMPLETELY BLANK -- plain coloured paper, no
+  handwriting, no scribbles."
+- Book / scroll / receipt -> "No visible text, titles, or printed characters -- treat it as a
+  plain blank object of the right shape and colour."
+
+## Choosing the register
+
+Two voices, both valid -- pick whichever genuinely fits the idea, using the counts given to you
+only as a tiebreaker:
+
+- Observational: a concrete modern-life noun + a deadpan twist. Has a joke and a POV.
+  Example: "There is no wisdom at the bottom of the feed. Pancracio checked."
+- Reframe: an abstract aphorism. Example: "Start with why. Otherwise, you may become very
+  efficient at the wrong thing."
+
+Target ratio across recent auto-published ideas is roughly 6 reframe : 4 observational -- lean
+toward whichever is under-represented, but never force a register that doesn't fit the idea's
+actual content just to hit the ratio.
+
+Pancracio observes and reframes; he does not coach. Avoid bare imperatives ("Start today",
+"Do the work now") -- that reads as off-voice coaching, not his register.
+
+## Output format
+
+Return ONLY a JSON object, no markdown fencing, no commentary before or after:
+{"prompt": "<the complete filled-in plate prompt, boilerplate + prop swap>",
+ "register": "reframe" | "observational",
+ "quote_line": "<the on-image quote text, not baked into the prompt -- Remotion composites it later>"}
+"""
 
 
 def check_auth(credentials: HTTPBasicCredentials = Depends(security)) -> None:
@@ -234,6 +332,207 @@ def _set_setting(key: str, value: str) -> None:
             """,
             (key, value),
         )
+
+
+def _get_recent_register_counts(window: int = 10) -> dict[str, int]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT register, COUNT(*) AS n FROM (
+                SELECT register FROM ideas
+                WHERE auto_publish = 1 AND register IS NOT NULL
+                ORDER BY created_at DESC LIMIT ?
+            ) GROUP BY register
+            """,
+            (window,),
+        ).fetchall()
+    return {r["register"]: r["n"] for r in rows}
+
+
+def _anthropic_messages(
+    system: str, user: str, tools: Optional[list] = None, max_tokens: int = 1500
+) -> dict:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured on the server")
+    body: dict = {
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+    }
+    if tools:
+        body["tools"] = tools
+    resp = httpx.post(
+        ANTHROPIC_API_URL,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json=body,
+        timeout=90,
+    )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Anthropic API error: {resp.text}")
+    return resp.json()
+
+
+def _draft_plate_prompt(idea: dict, register_counts: dict[str, int]) -> dict:
+    """Returns {"prompt": str, "register": "reframe"|"observational", "quote_line": str}"""
+    reframe_n = register_counts.get("reframe", 0)
+    observational_n = register_counts.get("observational", 0)
+    user = (
+        f"Idea title: {idea['title']}\n"
+        f"Idea description: {idea.get('description') or '(none)'}\n\n"
+        f"Of the last {reframe_n + observational_n} auto-published ideas, {reframe_n} were "
+        f"reframe register and {observational_n} were observational.\n\n"
+        "Return ONLY the JSON object described in your instructions, no markdown fencing, "
+        "no other text."
+    )
+    result = _anthropic_messages(system=PLATE_PROMPT_SYSTEM, user=user)
+    text = "".join(b["text"] for b in result.get("content", []) if b.get("type") == "text")
+    try:
+        parsed = json.loads(text)
+        if (
+            not isinstance(parsed, dict)
+            or not isinstance(parsed.get("prompt"), str)
+            or parsed.get("register") not in ("reframe", "observational")
+            or not isinstance(parsed.get("quote_line"), str)
+        ):
+            raise ValueError("missing/invalid required keys")
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(status_code=502, detail=f"Anthropic returned unexpected shape: {text[:500]}")
+    return parsed
+
+
+def _check_originality(line: str) -> dict:
+    """Returns {"flagged": bool, "reason": str | None}. Fails closed on API error."""
+    user = (
+        f'Search the web to check whether this exact line is a near-exact match to a known '
+        f'quote, book title, or famous phrase attributable to a specific source:\n\n"{line}"\n\n'
+        "Common idioms or generic phrasing with no single attributable source should NOT flag — "
+        "only near-exact matches to something specific and identifiable.\n\n"
+        "After searching, respond with ONLY the JSON object below as your final answer — no "
+        "explanation, no summary of what you found, no markdown fencing, nothing before or "
+        "after it:\n"
+        '{"flagged": true|false, "reason": "..." or null}'
+    )
+    try:
+        result = _anthropic_messages(
+            system=(
+                "You are an originality checker for social-media quote copy. Be precise: only "
+                "flag near-exact matches to a specific known quote/title, not loose thematic "
+                "similarity or common idioms. Keep your final answer to just the requested JSON "
+                "— do not narrate your search process or reasoning in the response."
+            ),
+            user=user,
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+            # Web search results themselves consume output-token budget alongside the model's
+            # own text — 1500 (the default) was observed truncating before the final JSON on a
+            # multi-result search, which fails closed but incorrectly on a genuinely original line.
+            max_tokens=4096,
+        )
+        text = "".join(
+            b["text"] for b in result.get("content", []) if b.get("type") == "text"
+        ).strip()
+        parsed = json.loads(text[text.rindex("{"):])
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("flagged"), bool):
+            raise ValueError("missing/invalid 'flagged' key")
+        flagged = parsed["flagged"]
+        reason = parsed.get("reason")
+    except HTTPException as e:
+        # Anthropic returned a non-200 (bad key, rate limit, etc.) — _anthropic_messages
+        # already turned that into an HTTPException.
+        logger.warning("originality-check API call failed, failing closed: %s", e.detail)
+        return {"flagged": True, "reason": f"originality check API call failed: {e.detail}"}
+    except httpx.HTTPError as e:
+        # Transport-level failure (timeout, connection error) — httpx raises these directly,
+        # they don't go through _anthropic_messages' HTTPException path.
+        logger.warning("originality-check network error, failing closed: %s", e)
+        return {"flagged": True, "reason": f"originality check network error: {e}"}
+    except (ValueError, json.JSONDecodeError):
+        logger.warning("originality-check response unparseable, failing closed: %r", text[:300])
+        return {"flagged": True, "reason": f"could not parse originality response: {text[:300]}"}
+
+    logger.info("originality-check line=%r flagged=%s reason=%s", line, flagged, reason)
+    return {"flagged": flagged, "reason": reason}
+
+
+def _crop_to_target(image_bytes: bytes, target_size: tuple[int, int] = PLATE_TARGET_SIZE) -> bytes:
+    """OpenAI's gpt-image-1 has no exact 4:5 output size — the closest portrait option
+    (1024x1536) is taller/narrower than our 1122x1402 target. Center-crop to the target
+    aspect ratio first (preserves framing better than a naive stretch), then resize to the
+    exact pixel dimensions Remotion's PancracioQuote composition expects."""
+    img = Image.open(io.BytesIO(image_bytes))
+    target_w, target_h = target_size
+    target_ratio = target_w / target_h
+    w, h = img.size
+    if w / h > target_ratio:
+        new_w = round(h * target_ratio)
+        left = (w - new_w) // 2
+        img = img.crop((left, 0, left + new_w, h))
+    else:
+        new_h = round(w / target_ratio)
+        top = (h - new_h) // 2
+        img = img.crop((0, top, w, top + new_h))
+    img = img.resize(target_size, Image.LANCZOS)
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _generate_plate_image(idea_id: int, prompt: str) -> str:
+    """Fetches the reference image, calls OpenAI's Images API, saves the result,
+    returns the saved path (relative to the repo root)."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured on the server")
+
+    ref_setting = _get_setting("character_reference_image")
+    if not ref_setting:
+        raise HTTPException(
+            status_code=400, detail="No character_reference_image configured — set one in Settings"
+        )
+    ref_path = BASE_DIR / ref_setting.removeprefix("/")
+    if not ref_path.exists():
+        raise HTTPException(status_code=400, detail=f"Reference image not found on disk: {ref_path}")
+
+    mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+    content_type = mime.get(ref_path.suffix.lower(), "image/png")
+
+    resp = httpx.post(
+        OPENAI_IMAGES_EDIT_URL,
+        headers={"Authorization": f"Bearer {api_key}"},
+        data={
+            "model": OPENAI_IMAGE_MODEL,
+            "prompt": prompt,
+            "size": OPENAI_IMAGE_GEN_SIZE,
+            "quality": OPENAI_IMAGE_QUALITY,
+            "input_fidelity": OPENAI_IMAGE_INPUT_FIDELITY,
+            "n": "1",
+        },
+        files={"image": (ref_path.name, ref_path.read_bytes(), content_type)},
+        timeout=180,
+    )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"OpenAI API error: {resp.text}")
+    data = resp.json()
+    raw = base64.b64decode(data["data"][0]["b64_json"])
+    cropped = _crop_to_target(raw)
+
+    out_dir = BASE_DIR.parent / "remotion" / "public" / "image-posts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / f"idea-{idea_id}.png"
+    dest.write_bytes(cropped)
+    rel_path = f"remotion/public/image-posts/idea-{idea_id}.png"
+
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE ideas SET layout_image_path = ?, updated_at = datetime('now') WHERE id = ?",
+            (rel_path, idea_id),
+        )
+    return rel_path
 
 
 def _get_posts_for_idea(idea_id: int) -> list[dict]:
@@ -716,6 +1015,33 @@ def api_list_ideas(
 @app.get("/api/ideas/{idea_id}")
 def api_get_idea(idea_id: int, _: None = Depends(check_auth)) -> dict:
     return _get_idea(idea_id)  # 404s if missing
+
+
+@app.get("/internal/register-counts")
+def internal_register_counts(_: None = Depends(check_auth)) -> dict:
+    """Debugging aid — current rolling reframe/observational counts."""
+    return _get_recent_register_counts()
+
+
+@app.post("/internal/draft-prompt")
+def internal_draft_prompt(idea_id: int = Form(...), _: None = Depends(check_auth)) -> dict:
+    idea = _get_idea(idea_id)  # 404s if missing
+    counts = _get_recent_register_counts()
+    return _draft_plate_prompt(idea, counts)
+
+
+@app.post("/internal/originality-check")
+def internal_originality_check(line: str = Form(...), _: None = Depends(check_auth)) -> dict:
+    return _check_originality(line)
+
+
+@app.post("/internal/generate-plate")
+def internal_generate_plate(
+    idea_id: int = Form(...), prompt: str = Form(...), _: None = Depends(check_auth)
+) -> dict:
+    _get_idea(idea_id)  # 404s if missing
+    path = _generate_plate_image(idea_id, prompt)
+    return {"idea_id": idea_id, "layout_image_path": path}
 
 
 @app.get("/settings")

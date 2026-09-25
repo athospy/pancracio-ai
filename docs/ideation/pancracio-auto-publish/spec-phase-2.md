@@ -316,10 +316,16 @@ curl -sf -u test:test -X POST http://127.0.0.1:8123/internal/originality-check -
 
 ## Open Items
 
-- [ ] Finalize the exact crop/pad math from OpenAI's actual output size to 1122×1402 once
+- [x] Finalize the exact crop/pad math from OpenAI's actual output size to 1122×1402 once
       the first real test image is generated — cannot be settled from documentation alone.
-- [ ] Decide whether short common idioms should flag in the originality check (see Feedback loop
+      **Resolved 2026-09-24**: generate at 1024×1536 (closest supported portrait size),
+      center-crop height to the 1122:1402 aspect ratio, resize to the exact target. Verified
+      against real generated images, landed at exactly 1122×1402 both times.
+- [x] Decide whether short common idioms should flag in the originality check (see Feedback loop
       above) — resolve during implementation testing, document the decision here.
+      **Resolved 2026-09-24**: common idioms/generic phrasing with no single attributable
+      source do NOT flag — only near-exact matches to a specific, identifiable quote/title.
+      Verified live: "one step at a time" does not flag, "Start With Why" does.
 
 ---
 
