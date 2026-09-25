@@ -245,6 +245,28 @@ async def attach_current_user(request: Request, call_next):
     return await call_next(request)
 
 
+@app.exception_handler(HTTPException)
+async def redirect_unauthenticated_pages_to_login(request: Request, exc: HTTPException):
+    """A bare 401 (FastAPI's default) is fine for API/internal callers (n8n, the login
+    page's own fetch call) — they check the status code, not the page. A human hitting
+    a page route with no session should land on the login page, not a raw JSON error.
+    Only redirects GET requests to page routes; POST /login's own 401 on a wrong
+    password stays JSON so its fetch-based error handling still works."""
+    if (
+        exc.status_code == 401
+        and request.method == "GET"
+        and not request.url.path.startswith("/api/")
+        and not request.url.path.startswith("/internal/")
+        and request.url.path != "/login"
+    ):
+        return RedirectResponse("/login", status_code=303)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
+
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
