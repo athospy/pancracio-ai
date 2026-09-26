@@ -63,7 +63,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// GET /api/ideas?due=true returns a JSON array in the response body. Explicitly\n// split it into one n8n item per idea, rather than relying on the HTTP Request\n// node's version-dependent auto-splitting of array responses.\nconst body = $input.first().json;\nconst ideas = Array.isArray(body) ? body : [];\nreturn ideas.map((idea) => ({ json: idea }));"
+        "jsCode": "const inputItems = $input.all();\nconst ideas = [];\nfor (const item of inputItems) {\n  if (Array.isArray(item.json)) {\n    ideas.push(...item.json);\n  } else {\n    ideas.push(item.json);\n  }\n}\nreturn ideas.map((idea) => ({ json: idea }));"
       }
     },
     {
@@ -134,7 +134,7 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "8e472585-ec94-4a48-8632-4d006d1727fd",
+  "versionId": "073e26b5-0215-4b49-b9fc-7ba23c71c513",
   "id": "syNlnICIa6tvLB99",
   "tags": []
 }
