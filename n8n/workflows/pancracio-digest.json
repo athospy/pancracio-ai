@@ -1,0 +1,141 @@
+{
+  "name": "Pancracio Daily Digest",
+  "nodes": [
+    {
+      "id": "d1a1b1c1-0001-4a1a-8a1a-000000000001",
+      "name": "Daily 9am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d1a1b1c1-0002-4a1a-8a1a-000000000002",
+      "name": "Get Auto-Publish Ideas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://pancracio-ideas.santiagomorel.dev/api/ideas",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "auto_publish",
+              "value": "true"
+            }
+          ]
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "F8WOkbGlhwKzrIOd",
+          "name": "Pancracio Tracker Bearer Token"
+        }
+      }
+    },
+    {
+      "id": "d1a1b1c1-0003-4a1a-8a1a-000000000003",
+      "name": "Build Digest Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// GET /api/ideas?auto_publish=true returns a JSON array, but the HTTP Request node auto-splits\n// a top-level array response into one n8n item per idea (confirmed empirically: 4 ideas -> 4\n// items on this node) -- same version-dependent behavior auto-publish.json's own \"Split Into\n// Ideas\" node comment warns about. So reconstruct the full array from all input items rather\n// than assuming $input.first().json is the array itself.\nconst ideas = $input.all().map((item) => item.json);\nconst pending = ideas.filter((i) => i.status === \"idea\");\npending.sort((a, b) => (a.scheduled_at || \"\").localeCompare(b.scheduled_at || \"\"));\nconst next = pending[0] || null;\n\nconst subject = next ? \"Pancracio: next up\" : \"Pancracio: nothing queued\";\nconst bodyHtml = next\n  ? `<html><body><h2>Next up</h2><p><strong>${next.title}</strong></p><p>${next.quote_line || \"\"}</p><p>Scheduled: ${next.scheduled_at || \"as soon as it's due\"}</p></body></html>`\n  : `<html><body><h2>Nothing queued</h2><p>No auto-publish ideas are currently pending.</p></body></html>`;\n\nreturn [{ json: { subject, html: bodyHtml } }];\n"
+      }
+    },
+    {
+      "id": "d1a1b1c1-0004-4a1a-8a1a-000000000004",
+      "name": "Send Digest Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": false,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { from: \"Pancracio Monitoring <pancracio@notify.santiagomorel.dev>\", to: [\"santi.morel@gmail.com\"], subject: $json.subject, html: $json.html } }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YWKHMHD0TNtFNyGS",
+          "name": "Resend API Key"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 9am": {
+      "main": [
+        [
+          {
+            "node": "Get Auto-Publish Ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Auto-Publish Ideas": {
+      "main": [
+        [
+          {
+            "node": "Build Digest Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Digest Content": {
+      "main": [
+        [
+          {
+            "node": "Send Digest Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "4e97cd85-3658-40da-b1af-5e506e28e9fe",
+  "id": "NqE0a5mDzfR5y0FU",
+  "tags": []
+}
+
