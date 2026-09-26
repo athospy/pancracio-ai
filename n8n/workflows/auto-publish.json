@@ -92,9 +92,91 @@
           "name": "Pancracio Tracker Bearer Token"
         }
       }
+    },
+    {
+      "id": "f1a1b1c1-0005-4a1a-8a1a-000000000005",
+      "name": "Get Current Idea Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://pancracio-ideas.santiagomorel.dev/api/ideas/{{ $('Split Into Ideas').item.json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "F8WOkbGlhwKzrIOd",
+          "name": "Pancracio Tracker Bearer Token"
+        }
+      }
+    },
+    {
+      "id": "f1a1b1c1-0006-4a1a-8a1a-000000000006",
+      "name": "Alert If Failed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b1c1d1e1-0001-4a1a-8a1a-000000000001",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "failed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f1a1b1c1-0007-4a1a-8a1a-000000000007",
+      "name": "Send Failure Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": false,
+      "position": [
+        1320,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { from: \"Pancracio Monitoring <pancracio@notify.santiagomorel.dev>\", to: [\"santi.morel@gmail.com\"], subject: \"Pancracio: pipeline failed on \\\"\" + $json.title + \"\\\"\", html: \"<html><body><h2>Pipeline failure</h2><p>Idea <strong>\" + $json.title + \"</strong> (id \" + $json.id + \") failed during auto-publish.</p><p>Check the tracker for details.</p></body></html>\" } }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YWKHMHD0TNtFNyGS",
+          "name": "Resend API Key"
+        }
+      }
     }
   ],
-  "pinData": null,
   "connections": {
     "Hourly": {
       "main": [
@@ -128,13 +210,49 @@
           }
         ]
       ]
+    },
+    "Run Pipeline For Idea": {
+      "main": [
+        [
+          {
+            "node": "Get Current Idea Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Current Idea Status": {
+      "main": [
+        [
+          {
+            "node": "Alert If Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert If Failed": {
+      "main": [
+        [
+          {
+            "node": "Send Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
     }
   },
   "active": true,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate"
   },
-  "versionId": "073e26b5-0215-4b49-b9fc-7ba23c71c513",
+  "versionId": "db437200-7c6a-4742-9d36-a9f8a7864025",
   "id": "syNlnICIa6tvLB99",
   "tags": []
 }
+
