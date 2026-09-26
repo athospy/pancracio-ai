@@ -251,13 +251,16 @@ async def redirect_unauthenticated_pages_to_login(request: Request, exc: HTTPExc
     page's own fetch call) — they check the status code, not the page. A human hitting
     a page route with no session should land on the login page, not a raw JSON error.
     Only redirects GET requests to page routes; POST /login's own 401 on a wrong
-    password stays JSON so its fetch-based error handling still works."""
+    password stays JSON so its fetch-based error handling still works. /dashboard/widgets
+    is also exempted — it's fetched by dashboard.js's polling loop, not navigated to, so it
+    needs a bare 401 the JS can detect and act on rather than a login-page redirect body."""
     if (
         exc.status_code == 401
         and request.method == "GET"
         and not request.url.path.startswith("/api/")
         and not request.url.path.startswith("/internal/")
         and request.url.path != "/login"
+        and request.url.path != "/dashboard/widgets"
     ):
         return RedirectResponse("/login", status_code=303)
     return JSONResponse(
@@ -508,6 +511,93 @@ def _get_recent_register_counts(window: int = 10) -> dict[str, int]:
             (window,),
         ).fetchall()
     return {r["register"]: r["n"] for r in rows}
+
+
+def _get_next_to_publish() -> Optional[dict]:
+    """The single soonest auto_publish idea not yet in a terminal state — what the dashboard's
+    next-to-publish widget shows. Deliberately scoped to auto_publish=1 only, matching the
+    calendar widget, so the dashboard describes only what this app itself controls."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, title, scheduled_at FROM ideas
+            WHERE auto_publish = 1 AND status NOT IN ('posted', 'failed', 'archived')
+            ORDER BY (scheduled_at IS NULL), scheduled_at ASC
+            LIMIT 1
+            """
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _get_recent_posts(limit: int = 5) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT posts.id, posts.post_url, posts.likes, posts.comments,
+                   posts.views, posts.shares, posts.saves, posts.posted_at,
+                   ideas.title
+            FROM posts JOIN ideas ON ideas.id = posts.idea_id
+            ORDER BY posts.posted_at DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _get_stalled_drafts(idle_days: int = 3) -> list[dict]:
+    """'scripted' ideas untouched for idle_days+ — a different failure mode than the freshly-added
+    widget (status='idea'): a draft that got started and then forgotten."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, updated_at FROM ideas
+            WHERE status = 'scripted' AND datetime(updated_at) <= datetime('now', ?)
+            ORDER BY updated_at ASC
+            """,
+            (f"-{idle_days} days",),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _get_upcoming_calendar(days: int = 7) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, scheduled_at FROM ideas
+            WHERE auto_publish = 1
+              AND datetime(scheduled_at) BETWEEN datetime('now') AND datetime('now', ?)
+            ORDER BY scheduled_at ASC
+            """,
+            (f"+{days} days",),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _get_quick_stats() -> dict:
+    with _connect() as conn:
+        backlog = conn.execute(
+            "SELECT COUNT(*) AS n FROM ideas WHERE status NOT IN ('posted', 'archived')"
+        ).fetchone()["n"]
+        days_since_post = conn.execute(
+            "SELECT CAST(julianday('now') - julianday(MAX(posted_at)) AS INTEGER) AS n FROM posts"
+        ).fetchone()["n"]
+    return {"backlog": backlog, "days_since_post": days_since_post}
+
+
+def _get_pipeline_health(stale_after_hours: int = 2) -> dict:
+    """Reads the latest heartbeat n8n's workflow pushes after every run (see
+    POST /internal/pipeline-heartbeat below). 'unknown' means no heartbeat has ever arrived yet
+    (e.g. before the n8n workflow's heartbeat node is added); 'stale' flags a real status that's
+    too old, meaning n8n itself stopped reporting in even though a status was once recorded."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT status, created_at, datetime(created_at) <= datetime('now', ?) AS stale "
+            "FROM pipeline_heartbeats ORDER BY id DESC LIMIT 1",
+            (f"-{stale_after_hours} hours",),
+        ).fetchone()
+    if row is None:
+        return {"status": "unknown", "heartbeat_at": None, "stale": True}
+    return {"status": row["status"], "heartbeat_at": row["created_at"], "stale": bool(row["stale"])}
 
 
 def _anthropic_messages(
@@ -1013,6 +1103,33 @@ def stats_page(request: Request, _: dict = Depends(get_current_user)):
     )
 
 
+def _dashboard_context() -> dict:
+    """Shared by /dashboard and /dashboard/widgets so the full page and the polling
+    fragment can never drift apart."""
+    register_counts = _get_recent_register_counts()
+    return {
+        "next_idea": _get_next_to_publish(),
+        "recent_posts": _get_recent_posts(limit=5),
+        "fresh_ideas": _get_ideas(status="idea", sort="newest", page=1)[0][:5],
+        "stalled": _get_stalled_drafts(),
+        "calendar_ideas": _get_upcoming_calendar(),
+        "quick_stats": _get_quick_stats(),
+        "register_counts": register_counts,
+        "register_counts_json": json.dumps(register_counts),
+        "pipeline_health": _get_pipeline_health(),
+    }
+
+
+@app.get("/dashboard")
+def dashboard_page(request: Request, _: dict = Depends(get_current_user)):
+    return templates.TemplateResponse(request, "dashboard.html", _dashboard_context())
+
+
+@app.get("/dashboard/widgets")
+def dashboard_widgets(request: Request, _: dict = Depends(get_current_user)):
+    return templates.TemplateResponse(request, "_dashboard_widgets.html", _dashboard_context())
+
+
 @app.post("/ideas")
 def create_idea(
     title: str = Form(...),
@@ -1472,6 +1589,19 @@ def api_get_idea(idea_id: int, _: dict = Depends(get_current_user)) -> dict:
 def internal_register_counts(_: dict = Depends(get_current_user)) -> dict:
     """Debugging aid — current rolling reframe/observational counts."""
     return _get_recent_register_counts()
+
+
+@app.post("/internal/pipeline-heartbeat")
+def pipeline_heartbeat(status: str = Form(...), _: dict = Depends(get_current_user)) -> dict:
+    """Called by the n8n auto-publish workflow after every run, success or failure. n8n's own
+    API is loopback-only on its VPS by design, so this is the dashboard's only signal for
+    pipeline health — see _get_pipeline_health() and docs/ideation/ideas-tracker-dashboard/."""
+    if status not in ("success", "failed"):
+        raise HTTPException(400, "status must be 'success' or 'failed'")
+    with _connect() as conn:
+        conn.execute("INSERT INTO pipeline_heartbeats (status) VALUES (?)", (status,))
+        conn.commit()
+    return {"ok": True}
 
 
 @app.post("/internal/draft-prompt")

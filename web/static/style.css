@@ -273,6 +273,23 @@ button, .btn-primary, .btn-secondary {
 
 .empty { color: var(--muted); text-align: center; padding: 24px 0; }
 
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.widget {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.widget h3 { margin: 0 0 8px; font-size: 0.95rem; }
+.widget p { margin: 4px 0; font-size: 0.85rem; }
+.widget .empty { padding: 8px 0; }
+
 @media (max-width: 480px) {
   .row { flex-direction: column; }
   .filter-form { flex-direction: column; }

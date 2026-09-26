@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Pancracio Ideas{% endblock %}
+{% block content %}
+
+<section>
+  <h2>Dashboard</h2>
+  <p class="muted">What's happening right now — refreshes automatically.</p>
+</section>
+
+<div id="dashboard-widgets" class="dashboard-grid">
+  {% include "_dashboard_widgets.html" %}
+</div>
+
+<script src="/static/dashboard.js"></script>
+{% endblock %}

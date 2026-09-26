@@ -1,0 +1,64 @@
+<section class="widget" data-widget="next-to-publish">
+  <h3>Next to publish</h3>
+  {% if next_idea %}
+  <p data-next-idea-id="{{ next_idea.id }}">
+    <a href="/ideas/{{ next_idea.id }}/edit">{{ next_idea.title }}</a> — {{ next_idea.scheduled_at or "unscheduled" }}
+  </p>
+  {% else %}
+  <p class="empty" data-next-idea-id="">Nothing scheduled.</p>
+  {% endif %}
+</section>
+
+<section class="widget" data-widget="just-posted">
+  <h3>Just posted</h3>
+  {% if not recent_posts %}<p class="empty">No posts yet.</p>{% endif %}
+  {% for p in recent_posts %}
+  <p data-post-id="{{ p.id }}">
+    <a href="{{ p.post_url }}" target="_blank" rel="noopener">{{ p.title }}</a>
+    — {{ p.likes if p.likes is not none else "—" }} likes, {{ p.comments if p.comments is not none else "—" }} comments
+  </p>
+  {% endfor %}
+</section>
+
+<section class="widget" data-widget="freshly-added">
+  <h3>Freshly added</h3>
+  {% if not fresh_ideas %}<p class="empty">Nothing new.</p>{% endif %}
+  {% for idea in fresh_ideas %}
+  <p data-fresh-idea-id="{{ idea.id }}"><a href="/ideas/{{ idea.id }}/edit">{{ idea.title }}</a></p>
+  {% endfor %}
+</section>
+
+<section class="widget" data-widget="needs-review">
+  <h3>Needs review</h3>
+  {% if not stalled %}<p class="empty">Nothing stalled.</p>{% endif %}
+  {% for idea in stalled %}
+  <p data-stalled-idea-id="{{ idea.id }}"><a href="/ideas/{{ idea.id }}/edit">{{ idea.title }}</a> — idle since {{ idea.updated_at }}</p>
+  {% endfor %}
+</section>
+
+<section class="widget" data-widget="pipeline-health" data-pipeline-status="{{ pipeline_health.status }}">
+  <h3>Pipeline health</h3>
+  {% if pipeline_health.status == "unknown" %}
+  <p class="empty">No pipeline data yet.</p>
+  {% else %}
+  <p>{{ pipeline_health.status }} — last heartbeat {{ pipeline_health.heartbeat_at }}{% if pipeline_health.stale %} (stale){% endif %}</p>
+  {% endif %}
+</section>
+
+<section class="widget" data-widget="register-balance" data-register-counts="{{ register_counts_json | e }}">
+  <h3>Register balance</h3>
+  <p>Reframe: {{ register_counts.get("reframe", 0) }} · Observational: {{ register_counts.get("observational", 0) }}</p>
+</section>
+
+<section class="widget" data-widget="quick-stats" data-backlog-count="{{ quick_stats.backlog }}" data-days-since-post="{{ quick_stats.days_since_post if quick_stats.days_since_post is not none else '' }}">
+  <h3>Quick stats</h3>
+  <p>{{ quick_stats.backlog }} in backlog · {{ quick_stats.days_since_post if quick_stats.days_since_post is not none else "no posts yet" }} days since last post</p>
+</section>
+
+<section class="widget" data-widget="calendar">
+  <h3>Upcoming week</h3>
+  {% if not calendar_ideas %}<p class="empty">Nothing scheduled this week.</p>{% endif %}
+  {% for idea in calendar_ideas %}
+  <p data-calendar-idea-id="{{ idea.id }}">{{ idea.scheduled_at }} — <a href="/ideas/{{ idea.id }}/edit">{{ idea.title }}</a></p>
+  {% endfor %}
+</section>

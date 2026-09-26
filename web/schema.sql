@@ -80,6 +80,17 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- One row per n8n auto-publish workflow run, pushed via POST /internal/pipeline-heartbeat.
+-- n8n's own API is loopback-only on its VPS by deliberate design (see
+-- docs/ideation/ideas-tracker-dashboard/contract-data.json), so the dashboard can't poll it
+-- directly — n8n instead reports in after every run, success or failure, giving the dashboard
+-- a plain local-DB signal for "is the pipeline actually running."
+CREATE TABLE IF NOT EXISTS pipeline_heartbeats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  status TEXT NOT NULL CHECK (status IN ('success', 'failed')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas(status);
 CREATE INDEX IF NOT EXISTS idx_posts_idea_id ON posts(idea_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
