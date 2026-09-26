@@ -2147,7 +2147,7 @@ body {
             <span class="stamp is-go">Approved</span>
             <div class="masthead-dates">
               <span class="meta">drafted 2026-09-26</span>
-              <span class="meta">supersedes contract-2026-09-26-2.html</span>
+              <span class="meta">supersedes contract-2026-09-26.html</span>
             </div>
             <button type="button" class="theme-toggle" id="theme-toggle" data-mode="auto" aria-label="Colour theme: follow system">
       <svg class="i-auto" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="M8 3v10" /><path d="M8 3a5 5 0 010 10z" fill="currentColor" stroke="none"/></svg>
@@ -2583,7 +2583,7 @@ body {
           </li>
           <li class="crit">
             <span class="crit-n">12</span>
-            <span class="crit-text">web/app.py is untouched by this project — no new backend endpoint was needed<code class="crit-check">test -z &quot;$(git diff main...HEAD -- web/app.py 2&gt;/dev/null)&quot;</code><span class="crit-expect"><span class="chip chip-caution crit-static">inspects files only</span></span></span>
+            <span class="crit-text">web/app.py is untouched by this project — no new backend endpoint was needed<code class="crit-check">test -z &quot;$(git diff 58ff3d71388275eb47b7c815231c40f392f19534 -- web/app.py 2&gt;/dev/null)&quot;</code><span class="crit-expect"><span class="chip chip-caution crit-static">inspects files only</span></span></span>
           </li>
         </ul>
       </div>
@@ -2628,7 +2628,7 @@ body {
           <h2 id="decisions-h">What was considered and turned down</h2>
           <p class="sec-sub">A rejected alternative is evidence, not an oversight. Before proposing one of these, read why it lost.</p>
         </div>
-        <span class="sec-count">×10</span>
+        <span class="sec-count">×9</span>
       </div>
       <ul class="decisions">
         <li class="decision">
@@ -2666,10 +2666,6 @@ body {
         <li class="decision">
           <h3>The daily digest workflow reports queue state only (nothing-queued vs. next-up); failure visibility stays exclusively the alert branch's job</h3>
           <p><span class="rejected">Instead of</span> Also having the digest's Code node check /api/ideas?status=failed for the last 24h. Plan-critic review (scope-creep and over-engineering lenses, independently) flagged that the failed-item check traced to no stated goal or success criterion, duplicated the dedicated Full-tier alert branch, and edged into the explicitly-deferred 'richer pipeline-health content' future item — removed rather than promoted, since goal 2's ~1h alert already covers failure visibility faster than a daily check could.</p>
-        </li>
-        <li class="decision">
-          <h3>web/app.py-untouched check uses `git diff main...HEAD` (this branch's own commits vs. the merge base), not a pinned historical commit SHA</h3>
-          <p><span class="rejected">Instead of</span> Pinning the check to a fixed baseline commit SHA captured at contract-approval time. Other sessions kept committing unrelated work to main throughout this project's execution (confirmed twice: a dashboard feature landed mid-project, then more commits landed again before Phase 3 finished), making any fixed SHA stale and the check unreliable through no fault of this project's own changes. A merge-base diff only checks what *this branch's own commits* touched, which is what the criterion actually means.</p>
         </li>
       </ul>
       </div>

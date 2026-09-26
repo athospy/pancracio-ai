@@ -94,7 +94,7 @@
     },
     {
       "criterion": "web/app.py is untouched by this project — no new backend endpoint was needed",
-      "check": { "cmd": "test -z \"$(git diff 58ff3d71388275eb47b7c815231c40f392f19534 -- web/app.py 2>/dev/null)\"", "expect": "exits 0" }
+      "check": { "cmd": "test -z \"$(git diff main...HEAD -- web/app.py 2>/dev/null)\"", "expect": "exits 0" }
     }
   ],
   "scope": {
@@ -164,6 +164,11 @@
       "decision": "The daily digest workflow reports queue state only (nothing-queued vs. next-up); failure visibility stays exclusively the alert branch's job",
       "rejected": "Also having the digest's Code node check /api/ideas?status=failed for the last 24h",
       "reason": "Plan-critic review (scope-creep and over-engineering lenses, independently) flagged that the failed-item check traced to no stated goal or success criterion, duplicated the dedicated Full-tier alert branch, and edged into the explicitly-deferred 'richer pipeline-health content' future item — removed rather than promoted, since goal 2's ~1h alert already covers failure visibility faster than a daily check could."
+    },
+    {
+      "decision": "web/app.py-untouched check uses `git diff main...HEAD` (this branch's own commits vs. the merge base), not a pinned historical commit SHA",
+      "rejected": "Pinning the check to a fixed baseline commit SHA captured at contract-approval time",
+      "reason": "Other sessions kept committing unrelated work to main throughout this project's execution (confirmed twice: a dashboard feature landed mid-project, then more commits landed again before Phase 3 finished), making any fixed SHA stale and the check unreliable through no fault of this project's own changes. A merge-base diff only checks what *this branch's own commits* touched, which is what the criterion actually means."
     }
   ],
   "execution": {

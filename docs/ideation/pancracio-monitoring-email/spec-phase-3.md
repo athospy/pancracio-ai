@@ -213,10 +213,11 @@ credential.
 grep -q '"httpHeaderAuth"' n8n/workflows/auto-publish.json && echo "credential OK"
 grep -q '<html' n8n/workflows/auto-publish.json && echo "html OK"
 
-# Confirm web/app.py is still untouched by this project (pinned to this project's own baseline
-# commit — a second, unrelated dashboard feature landed on main mid-project and re-pinned this
-# once already; that's expected, not a regression, as long as nothing in *this* diff touches it)
-test -z "$(git diff 58ff3d71388275eb47b7c815231c40f392f19534 -- web/app.py 2>/dev/null)" && echo "app.py untouched"
+# Confirm web/app.py is untouched by THIS branch's own commits (merge-base diff against main,
+# not a pinned historical SHA -- other sessions keep committing unrelated work to main throughout
+# this project, which made a fixed-SHA check go stale twice; a merge-base diff only sees what
+# this branch itself changed, regardless of how much unrelated history lands on main meanwhile)
+test -z "$(git diff main...HEAD -- web/app.py 2>/dev/null)" && echo "app.py untouched"
 ```
 
 ## Rollout Considerations
