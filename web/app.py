@@ -520,12 +520,11 @@ def _get_next_to_publish() -> Optional[dict]:
 
     Also reports tie_count: how many OTHER auto_publish ideas share this exact scheduled_at.
     Ties are real — _default_scheduled_at() defaults every unscheduled auto_publish idea to the
-    same 10am slot, so a batch add commonly produces several ideas due at once. n8n's workflow
-    (GET /api/ideas?due=true has no LIMIT) picks up all of them and runs Run Pipeline For Idea
-    once per idea, sequentially (n8n's default per-item behavior for a plain HTTP Request node,
-    no batching/parallel option configured) with onError=continueRegularOutput so one idea's
-    failure doesn't block the rest — but this widget only ever shows one, so tie_count keeps
-    that from silently hiding the others."""
+    same 10am slot, so a batch add commonly produces several ideas due at once. _get_ideas_api's
+    due=true filter enforces one post per day account-wide (nothing is due again once anything
+    has posted today) and only ever returns the single earliest-scheduled idea, so a tied sibling
+    simply waits and re-qualifies on a later day — it is never dropped, just delayed. This widget
+    only ever shows one idea, so tie_count keeps that delay from being silently invisible."""
     with _connect() as conn:
         row = conn.execute(
             """
@@ -1315,13 +1314,18 @@ def mark_posted(
     user: dict = Depends(get_current_user),
 ):
     _get_idea(idea_id)  # 404s if missing
+    # Default to today (same 'YYYY-MM-DD' shape the <input type="date"> submits when filled in)
+    # rather than leaving posted_at NULL — a NULL here would silently exempt this post from the
+    # one-post-per-day check in _get_ideas_api's due=true filter (date(NULL) is NULL, never
+    # matches date('now')), letting the auto-pipeline post again the same day.
+    posted_at = posted_at or datetime.now().strftime("%Y-%m-%d")
     with _connect() as conn:
         conn.execute(
             """
             INSERT INTO posts (idea_id, platform, post_url, posted_at)
             VALUES (?, ?, ?, ?)
             """,
-            (idea_id, platform, post_url, posted_at or None),
+            (idea_id, platform, post_url, posted_at),
         )
         conn.execute(
             "UPDATE ideas SET status = 'posted', updated_at = datetime('now') WHERE id = ?",
@@ -1569,6 +1573,7 @@ def _get_ideas_api(
 ) -> list[dict]:
     where = "WHERE 1=1"
     params: list = []
+    order_limit = ""
     if status:
         where += " AND status = ?"
         params.append(status)
@@ -1584,12 +1589,25 @@ def _get_ideas_api(
         # SQLite's datetime('now') is space-separated — a raw `scheduled_at <= datetime('now')`
         # silently compares 'T' vs ' ' lexicographically and is wrong for same-day times
         # (verified against production: a clearly-past 10:00 came back as not-yet-due).
+        #
+        # One-post-per-day cadence: nothing is due again once ANYTHING has posted today
+        # (any post, any source — manual Meta Business Suite or the automated pipeline),
+        # checked against the whole posts table since this is a whole-account rule, not
+        # an auto-pipeline-only one. Both sides use date(), consistent with every posted_at/
+        # scheduled_at value in this app being a UTC-naive string on a server that runs UTC.
         where += (
             " AND auto_publish = 1 AND status = 'idea'"
             " AND (scheduled_at IS NULL OR datetime(scheduled_at) <= datetime('now'))"
+            " AND NOT EXISTS (SELECT 1 FROM posts WHERE date(posted_at) = date('now'))"
         )
+        # Multiple ideas can share the same scheduled_at — every unscheduled auto_publish idea
+        # defaults to the same 10am via _default_scheduled_at(), so a batch add commonly produces
+        # ties. Only the single earliest-scheduled idea is actually due; a tied sibling simply
+        # isn't returned today and re-qualifies on a later day's check once today's post-budget
+        # is used, still in earliest-first order — no explicit rescheduling needed.
+        order_limit = " ORDER BY (scheduled_at IS NULL), scheduled_at ASC LIMIT 1"
     with _connect() as conn:
-        rows = conn.execute(f"SELECT * FROM ideas {where}", params).fetchall()
+        rows = conn.execute(f"SELECT * FROM ideas {where}{order_limit}", params).fetchall()
     return [dict(r) for r in rows]
 
 

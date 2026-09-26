@@ -6,7 +6,7 @@
     <a href="/ideas/{{ next_idea.id }}/edit">{{ next_idea.title }}</a> — {{ next_idea.scheduled_at or "unscheduled" }}
   </p>
   {% if next_idea.tie_count > 0 %}
-  <p class="widget-note">+{{ next_idea.tie_count }} more idea{{ "s" if next_idea.tie_count != 1 else "" }} due at this exact time — n8n runs them one after another, not skipped.</p>
+  <p class="widget-note">+{{ next_idea.tie_count }} more idea{{ "s" if next_idea.tie_count != 1 else "" }} due at this exact time — only one post goes out per day, so it'll wait for a later day rather than posting alongside this one.</p>
   {% endif %}
   {% else %}
   <p class="empty" data-next-idea-id="">Nothing scheduled.</p>
