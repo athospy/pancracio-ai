@@ -516,7 +516,16 @@ def _get_recent_register_counts(window: int = 10) -> dict[str, int]:
 def _get_next_to_publish() -> Optional[dict]:
     """The single soonest auto_publish idea not yet in a terminal state — what the dashboard's
     next-to-publish widget shows. Deliberately scoped to auto_publish=1 only, matching the
-    calendar widget, so the dashboard describes only what this app itself controls."""
+    calendar widget, so the dashboard describes only what this app itself controls.
+
+    Also reports tie_count: how many OTHER auto_publish ideas share this exact scheduled_at.
+    Ties are real — _default_scheduled_at() defaults every unscheduled auto_publish idea to the
+    same 10am slot, so a batch add commonly produces several ideas due at once. n8n's workflow
+    (GET /api/ideas?due=true has no LIMIT) picks up all of them and runs Run Pipeline For Idea
+    once per idea, sequentially (n8n's default per-item behavior for a plain HTTP Request node,
+    no batching/parallel option configured) with onError=continueRegularOutput so one idea's
+    failure doesn't block the rest — but this widget only ever shows one, so tie_count keeps
+    that from silently hiding the others."""
     with _connect() as conn:
         row = conn.execute(
             """
@@ -526,7 +535,22 @@ def _get_next_to_publish() -> Optional[dict]:
             LIMIT 1
             """
         ).fetchone()
-    return dict(row) if row else None
+        if row is None:
+            return None
+        idea = dict(row)
+        if idea["scheduled_at"] is not None:
+            tie_count = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM ideas
+                WHERE auto_publish = 1 AND status NOT IN ('posted', 'failed', 'archived')
+                  AND scheduled_at = ? AND id != ?
+                """,
+                (idea["scheduled_at"], idea["id"]),
+            ).fetchone()["n"]
+        else:
+            tie_count = 0
+        idea["tie_count"] = tie_count
+    return idea
 
 
 def _get_recent_posts(limit: int = 5) -> list[dict]:

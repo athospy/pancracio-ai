@@ -91,7 +91,7 @@
     },
     {
       "criterion": "The register-balance widget's counts match the existing GET /internal/register-counts endpoint exactly",
-      "check": { "cmd": "TOKEN=$(curl -s -X POST http://localhost:8000/login -d \"username=$DASH_USER\" -d \"password=$DASH_PASS\" | jq -r .token); A=$(curl -s -H \"Authorization: Bearer $TOKEN\" http://localhost:8000/internal/register-counts | jq -S .); B=$(curl -s -H \"Authorization: Bearer $TOKEN\" http://localhost:8000/dashboard | grep -o 'data-register-counts=\"[^\"]*\"' | cut -d'\"' -f2 | python3 -c 'import json,sys,html; print(json.dumps(json.loads(html.unescape(sys.stdin.read())), sort_keys=True))'); [ \"$A\" = \"$B\" ]", "expect": "exits 0 (values match)" }
+      "check": { "cmd": "TOKEN=$(curl -s -X POST http://localhost:8000/login -d \"username=$DASH_USER\" -d \"password=$DASH_PASS\" | jq -r .token); A=$(curl -s -H \"Authorization: Bearer $TOKEN\" http://localhost:8000/internal/register-counts | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin), sort_keys=True))'); B=$(curl -s -H \"Authorization: Bearer $TOKEN\" http://localhost:8000/dashboard | grep -o 'data-register-counts=\"[^\"]*\"' | cut -d'\"' -f2 | python3 -c 'import json,sys,html; print(json.dumps(json.loads(html.unescape(sys.stdin.read())), sort_keys=True))'); [ \"$A\" = \"$B\" ]", "expect": "exits 0 (values match)" }
     },
     {
       "criterion": "The pipeline-health widget correctly reflects the heartbeat table's state: an explicit 'no data yet' state before any heartbeat exists, and the real status/timestamp after one is recorded",

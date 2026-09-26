@@ -286,9 +286,41 @@ button, .btn-primary, .btn-secondary {
   padding: 14px;
 }
 
-.widget h3 { margin: 0 0 8px; font-size: 0.95rem; }
+.widget h3 { margin: 0 0 2px; font-size: 0.95rem; }
 .widget p { margin: 4px 0; font-size: 0.85rem; }
-.widget .empty { padding: 8px 0; }
+.widget .empty { padding: 8px 0; font-size: 0.8rem; }
+
+.widget .widget-caption {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.widget .widget-note {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
+.widget-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+.widget-stat-grid .stat-value { font-size: 1.2rem; }
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 5px;
+}
+.status-dot.success { background: #3a9d4f; }
+.status-dot.failed { background: #c0392b; }
+.status-dot.stale { background: #d9922b; }
+.status-dot.unknown { background: var(--muted); }
 
 @media (max-width: 480px) {
   .row { flex-direction: column; }

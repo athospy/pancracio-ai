@@ -2149,7 +2149,6 @@ body {
               <span class="meta">drafted 2026-09-26</span>
               <span class="meta">express · one confirmation</span>
               <span class="meta">branch worktree-ideation+ideas-tracker-dashboard</span>
-              <span class="meta">supersedes contract-2026-09-26.html</span>
             </div>
             <button type="button" class="theme-toggle" id="theme-toggle" data-mode="auto" aria-label="Colour theme: follow system">
       <svg class="i-auto" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="M8 3v10" /><path d="M8 3a5 5 0 010 10z" fill="currentColor" stroke="none"/></svg>
@@ -2175,7 +2174,7 @@ body {
             <span class="kicker">checkable</span>
             <span class="fs-figure"><span class="num">12</span><span class="fs-of">/13</span></span>
             <span class="fs-note">1 needs a human to look</span>
-            <div class="meter" aria-hidden="true"><span class="warn"></span><span class="warn"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class=""></span></div>
+            <div class="meter" aria-hidden="true"><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class=""></span></div>
           </div>
           <div class="fs-cell">
             <span class="kicker">scope</span>
@@ -2516,19 +2515,19 @@ body {
         <ul class="crits">
           <li class="crit">
             <span class="crit-n">01</span>
-            <span class="crit-text">An unauthenticated GET to /dashboard redirects to /login, matching every other page route in this app<code class="crit-check">[ &quot;$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/dashboard)&quot; = &quot;303&quot; ]</code><span class="crit-expect">expect: exits 0 (code is 303)<span class="chip chip-caution crit-static">inspects files only</span></span></span>
+            <span class="crit-text">An unauthenticated GET to /dashboard redirects to /login, matching every other page route in this app<code class="crit-check">curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/dashboard</code><span class="crit-expect">expect: 303</span></span>
           </li>
           <li class="crit">
             <span class="crit-n">02</span>
-            <span class="crit-text">An unauthenticated GET to /dashboard/widgets returns a bare 401 (not an HTML redirect), so the polling JS can detect an expired session and redirect the whole page itself<code class="crit-check">[ &quot;$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/dashboard/widgets)&quot; = &quot;401&quot; ]</code><span class="crit-expect">expect: exits 0 (code is 401)<span class="chip chip-caution crit-static">inspects files only</span></span></span>
+            <span class="crit-text">An unauthenticated GET to /dashboard/widgets returns a bare 401 (not an HTML redirect), so the polling JS can detect an expired session and redirect the whole page itself<code class="crit-check">curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/dashboard/widgets</code><span class="crit-expect">expect: 401</span></span>
           </li>
           <li class="crit">
             <span class="crit-n">03</span>
-            <span class="crit-text">An authenticated GET to /dashboard renders all 8 named widget sections (next-to-publish, just-posted, freshly-added, needs-review, pipeline-health, register-balance, quick-stats [backlog + days-since-last-post], calendar)<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); N=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -o 'data-widget=&quot;[a-z-]*&quot;' | sort -u | wc -l | tr -d ' '); [ &quot;$N&quot; = &quot;8&quot; ]</code><span class="crit-expect">expect: exits 0 (8 distinct widgets)</span></span>
+            <span class="crit-text">An authenticated GET to /dashboard renders all 8 named widget sections (next-to-publish, just-posted, freshly-added, needs-review, pipeline-health, register-balance, quick-stats [backlog + days-since-last-post], calendar)<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -oP 'data-widget=&quot;\K[a-z-]+' | sort -u | wc -l</code><span class="crit-expect">expect: 8</span></span>
           </li>
           <li class="crit">
             <span class="crit-n">04</span>
-            <span class="crit-text">GET /dashboard/widgets returns the same 8 named sections as a bare HTML fragment (no page chrome), so client-side JS can swap it in without client-side templating<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); N=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard/widgets | grep -o 'data-widget=&quot;[a-z-]*&quot;' | sort -u | wc -l | tr -d ' '); [ &quot;$N&quot; = &quot;8&quot; ]</code><span class="crit-expect">expect: exits 0 (8 distinct widgets)</span></span>
+            <span class="crit-text">GET /dashboard/widgets returns the same 8 named sections as a bare HTML fragment (no page chrome), so client-side JS can swap it in without client-side templating<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard/widgets | grep -oP 'data-widget=&quot;\K[a-z-]+' | sort -u | wc -l</code><span class="crit-expect">expect: 8</span></span>
           </li>
           <li class="crit">
             <span class="crit-n">05</span>
@@ -2536,19 +2535,19 @@ body {
           </li>
           <li class="crit">
             <span class="crit-n">06</span>
-            <span class="crit-text">The just-posted widget's 5 entries match the tracker's actual 5 most recent posts, not stale/hardcoded data<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); A=$(sqlite3 web/pancracio.db &quot;SELECT id FROM posts ORDER BY posted_at DESC LIMIT 5&quot;); B=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -o 'data-post-id=&quot;[0-9]*&quot;' | cut -d'&quot;' -f2); [ &quot;$A&quot; = &quot;$B&quot; ]</code><span class="crit-expect">expect: exits 0 (lists match)</span></span>
+            <span class="crit-text">The just-posted widget's 5 entries match the tracker's actual 5 most recent posts, not stale/hardcoded data<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); A=$(sqlite3 web/pancracio.db &quot;SELECT id FROM posts ORDER BY posted_at DESC LIMIT 5&quot;); B=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -oP 'data-post-id=&quot;\K[0-9]+'); [ &quot;$A&quot; = &quot;$B&quot; ]</code><span class="crit-expect">expect: exits 0 (lists match)</span></span>
           </li>
           <li class="crit">
             <span class="crit-n">07</span>
-            <span class="crit-text">The freshly-added widget's 5 entries match the 5 most recent status='idea' ideas<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); A=$(sqlite3 web/pancracio.db &quot;SELECT id FROM ideas WHERE status='idea' ORDER BY created_at DESC LIMIT 5&quot;); B=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -o 'data-fresh-idea-id=&quot;[0-9]*&quot;' | cut -d'&quot;' -f2); [ &quot;$A&quot; = &quot;$B&quot; ]</code><span class="crit-expect">expect: exits 0 (lists match)</span></span>
+            <span class="crit-text">The freshly-added widget's 5 entries match the 5 most recent status='idea' ideas<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); A=$(sqlite3 web/pancracio.db &quot;SELECT id FROM ideas WHERE status='idea' ORDER BY created_at DESC LIMIT 5&quot;); B=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -oP 'data-fresh-idea-id=&quot;\K[0-9]+'); [ &quot;$A&quot; = &quot;$B&quot; ]</code><span class="crit-expect">expect: exits 0 (lists match)</span></span>
           </li>
           <li class="crit">
             <span class="crit-n">08</span>
-            <span class="crit-text">The needs-review widget lists exactly the ideas with status='scripted' untouched (updated_at) for 3+ days<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); A=$(sqlite3 web/pancracio.db &quot;SELECT id FROM ideas WHERE status='scripted' AND datetime(updated_at) &lt;= datetime('now','-3 days') ORDER BY updated_at ASC&quot;); B=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -o 'data-stalled-idea-id=&quot;[0-9]*&quot;' | cut -d'&quot;' -f2); [ &quot;$A&quot; = &quot;$B&quot; ]</code><span class="crit-expect">expect: exits 0 (lists match)</span></span>
+            <span class="crit-text">The needs-review widget lists exactly the ideas with status='scripted' untouched (updated_at) for 3+ days<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); A=$(sqlite3 web/pancracio.db &quot;SELECT id FROM ideas WHERE status='scripted' AND datetime(updated_at) &lt;= datetime('now','-3 days') ORDER BY updated_at ASC&quot;); B=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -oP 'data-stalled-idea-id=&quot;\K[0-9]+'); [ &quot;$A&quot; = &quot;$B&quot; ]</code><span class="crit-expect">expect: exits 0 (lists match)</span></span>
           </li>
           <li class="crit">
             <span class="crit-n">09</span>
-            <span class="crit-text">The calendar widget shows exactly the auto_publish ideas scheduled in the next 7 days<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); A=$(sqlite3 web/pancracio.db &quot;SELECT id FROM ideas WHERE auto_publish=1 AND datetime(scheduled_at) BETWEEN datetime('now') AND datetime('now','+7 days') ORDER BY scheduled_at ASC&quot;); B=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -o 'data-calendar-idea-id=&quot;[0-9]*&quot;' | cut -d'&quot;' -f2); [ &quot;$A&quot; = &quot;$B&quot; ]</code><span class="crit-expect">expect: exits 0 (lists match)</span></span>
+            <span class="crit-text">The calendar widget shows exactly the auto_publish ideas scheduled in the next 7 days<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); A=$(sqlite3 web/pancracio.db &quot;SELECT id FROM ideas WHERE auto_publish=1 AND datetime(scheduled_at) BETWEEN datetime('now') AND datetime('now','+7 days') ORDER BY scheduled_at ASC&quot;); B=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -oP 'data-calendar-idea-id=&quot;\K[0-9]+'); [ &quot;$A&quot; = &quot;$B&quot; ]</code><span class="crit-expect">expect: exits 0 (lists match)</span></span>
           </li>
           <li class="crit">
             <span class="crit-n">10</span>
@@ -2556,7 +2555,7 @@ body {
           </li>
           <li class="crit">
             <span class="crit-n">11</span>
-            <span class="crit-text">The register-balance widget's counts match the existing GET /internal/register-counts endpoint exactly<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); A=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/internal/register-counts | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin), sort_keys=True))'); B=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -o 'data-register-counts=&quot;[^&quot;]*&quot;' | cut -d'&quot;' -f2 | python3 -c 'import json,sys,html; print(json.dumps(json.loads(html.unescape(sys.stdin.read())), sort_keys=True))'); [ &quot;$A&quot; = &quot;$B&quot; ]</code><span class="crit-expect">expect: exits 0 (values match)</span></span>
+            <span class="crit-text">The register-balance widget's counts match the existing GET /internal/register-counts endpoint exactly<code class="crit-check">TOKEN=$(curl -s -X POST http://localhost:8000/login -d &quot;username=$DASH_USER&quot; -d &quot;password=$DASH_PASS&quot; | jq -r .token); A=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/internal/register-counts | jq -S .); B=$(curl -s -H &quot;Authorization: Bearer $TOKEN&quot; http://localhost:8000/dashboard | grep -oP 'data-register-counts=&quot;\K[^&quot;]+' | python3 -c 'import json,sys,html; print(json.dumps(json.loads(html.unescape(sys.stdin.read())), sort_keys=True))'); [ &quot;$A&quot; = &quot;$B&quot; ]</code><span class="crit-expect">expect: exits 0 (values match)</span></span>
           </li>
           <li class="crit">
             <span class="crit-n">12</span>
