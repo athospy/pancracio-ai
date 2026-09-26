@@ -1535,48 +1535,63 @@ def _run_auto_publish_pipeline(idea_id: int, user: Optional[dict] = None) -> dic
     no partial-success ambiguity. Called in-process from Phase 2/3's plain functions (not their
     HTTP endpoints), so their own persistence (layout/final image paths) still happens as each
     step completes — deliberately, so a failure partway through still leaves visible partial
-    progress on the idea row for debugging, same as a human would want to see."""
+    progress on the idea row for debugging, same as a human would want to see.
+
+    Skips drafting/generating/visual-QA entirely when `final_image_path` is already set —
+    an idea with an existing final image has already been reviewed by a human (including,
+    potentially, a deliberate override of an automated visual-QA false positive), so
+    re-running this on a 'failed' idea publishes what was reviewed instead of rolling a
+    fresh, unreviewed draft. Still drafts a caption if one isn't set yet."""
     idea = _get_idea(idea_id)
     try:
-        counts = _get_recent_register_counts()
-        draft = _draft_plate_prompt(idea, counts)
-        with _connect() as conn:
-            conn.execute(
-                """
-                UPDATE ideas SET register = ?, quote_line = ?, image_prompt = ?,
-                    updated_at = datetime('now')
-                WHERE id = ?
-                """,
-                (draft["register"], draft["quote_line"], draft["prompt"], idea_id),
-            )
-        idea = {
-            **idea,
-            "register": draft["register"],
-            "quote_line": draft["quote_line"],
-            "image_prompt": draft["prompt"],
-        }
+        # If a final image already exists, a human has already seen and approved this
+        # exact idea's content (including, potentially, overriding an automated
+        # visual-quality false positive — see docs/ideation/pancracio-user-accounts/
+        # lessons-learned.md) — trust it rather than redrafting/regenerating from
+        # scratch, which would silently discard that review. This is what lets
+        # re-running the pipeline on a previously-'failed' idea publish the
+        # already-reviewed image instead of rolling the dice on a fresh one.
+        if not idea.get("final_image_path"):
+            counts = _get_recent_register_counts()
+            draft = _draft_plate_prompt(idea, counts)
+            with _connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE ideas SET register = ?, quote_line = ?, image_prompt = ?,
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (draft["register"], draft["quote_line"], draft["prompt"], idea_id),
+                )
+            idea = {
+                **idea,
+                "register": draft["register"],
+                "quote_line": draft["quote_line"],
+                "image_prompt": draft["prompt"],
+            }
 
-        check = _check_originality(draft["quote_line"])
-        if check["flagged"]:
-            raise RuntimeError(f"originality check flagged: {check['reason']}")
+            check = _check_originality(draft["quote_line"])
+            if check["flagged"]:
+                raise RuntimeError(f"originality check flagged: {check['reason']}")
 
-        layout_path = _generate_plate_image(idea_id, draft["prompt"])
-        idea = {**idea, "layout_image_path": layout_path}
+            layout_path = _generate_plate_image(idea_id, draft["prompt"])
+            idea = {**idea, "layout_image_path": layout_path}
 
-        final_path = _render_post_image(idea)
-        idea = {**idea, "final_image_path": final_path}
+            final_path = _render_post_image(idea)
+            idea = {**idea, "final_image_path": final_path}
 
-        visual_check = _check_visual_quality(f"{TRACKER_PUBLIC_BASE}{final_path}")
-        if visual_check["flagged"]:
-            raise RuntimeError(f"visual quality check flagged: {visual_check['reason']}")
+            visual_check = _check_visual_quality(f"{TRACKER_PUBLIC_BASE}{final_path}")
+            if visual_check["flagged"]:
+                raise RuntimeError(f"visual quality check flagged: {visual_check['reason']}")
 
-        caption = _draft_caption(idea)
-        with _connect() as conn:
-            conn.execute(
-                "UPDATE ideas SET caption = ?, hashtags = ?, updated_at = datetime('now') WHERE id = ?",
-                (caption["caption"], caption["hashtags"], idea_id),
-            )
-        idea = {**idea, **caption}
+        if not idea.get("caption"):
+            caption = _draft_caption(idea)
+            with _connect() as conn:
+                conn.execute(
+                    "UPDATE ideas SET caption = ?, hashtags = ?, updated_at = datetime('now') WHERE id = ?",
+                    (caption["caption"], caption["hashtags"], idea_id),
+                )
+            idea = {**idea, **caption}
 
         result = _publish_to_instagram(idea)
         with _connect() as conn:
